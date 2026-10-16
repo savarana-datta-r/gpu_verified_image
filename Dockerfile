@@ -6,7 +6,7 @@
 # baked in here and wired up by the entrypoint from environment supplied at
 # launch.
 #
-#   docker build -t ghcr.io/blackboxai-dev/gpu-verified:cuda12.4 .
+#   docker build -t ghcr.io/savarana-datta-r/gpu-verified:cuda12.4 .
 #
 # The entrypoint reads, from the container environment:
 #   PUBLIC_KEY       the renter's SSH public key
@@ -36,8 +36,8 @@ ARG VERSION="cuda12.4"
 ARG DOCS_REF="main"
 LABEL org.opencontainers.image.title="Verified-login GPU image" \
       org.opencontainers.image.description="CUDA 12.4 runtime with sshd and a one-time-code SSH login gate, for GPU hosts that cannot run a post-boot hook." \
-      org.opencontainers.image.source="https://github.com/blackboxai-dev/gpu-verified-image" \
-      org.opencontainers.image.documentation="https://github.com/blackboxai-dev/gpu-verified-image/blob/$DOCS_REF/README.md" \
+      org.opencontainers.image.source="https://github.com/savarana-datta-r/gpu_verified_image" \
+      org.opencontainers.image.documentation="https://github.com/savarana-datta-r/gpu_verified_image/blob/$DOCS_REF/README.md" \
       org.opencontainers.image.vendor="Blackbox AI" \
       org.opencontainers.image.base.name="docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04" \
       org.opencontainers.image.revision="$REVISION" \

@@ -8,7 +8,7 @@ through untouched. The result is a record of who actually logged in, rather
 than a record of who was given a key.
 
 ```
-ghcr.io/blackboxai-dev/gpu-verified:cuda12.4
+ghcr.io/savarana-datta-r/gpu-verified:cuda12.4
 ```
 
 ## Two ways to use it
@@ -29,7 +29,7 @@ docker run -d --gpus all -p 2222:22 \
   -e PUBLIC_KEY="$(cat ~/.ssh/id_ed25519.pub)" \
   -e GPU_VERIFY_URL="https://your-verifier.example.com/verify" \
   -e GPU_RUN_TOKEN="…" \
-  ghcr.io/blackboxai-dev/gpu-verified:cuda12.4
+  ghcr.io/savarana-datta-r/gpu-verified:cuda12.4
 
 ssh -p 2222 root@localhost
 ```
@@ -63,7 +63,7 @@ Jupyter — this is the `runtime` base, not `devel`. The image exists to carry
 the gate. A workload that needs a toolchain should build on top of it:
 
 ```dockerfile
-FROM ghcr.io/blackboxai-dev/gpu-verified:cuda12.4
+FROM ghcr.io/savarana-datta-r/gpu-verified:cuda12.4
 RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
  && rm -rf /var/lib/apt/lists/*
 ```
@@ -80,7 +80,7 @@ CUDA container.
 For a GPU machine that already exists. Needs root, `sshd`, and `curl`.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/blackboxai-dev/gpu-verified-image/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/savarana-datta-r/gpu_verified_image/main/install.sh \
   | sudo GPU_VERIFY_URL="https://your-verifier.example.com/verify" \
          GPU_RUN_TOKEN="…" \
          bash
@@ -90,7 +90,7 @@ Or, if you would rather read it first — which you should, before piping
 anything to `sudo bash`:
 
 ```sh
-git clone https://github.com/blackboxai-dev/gpu-verified-image
+git clone https://github.com/savarana-datta-r/gpu_verified_image
 cd gpu-verified-image
 sudo GPU_VERIFY_URL="…" GPU_RUN_TOKEN="…" ./install.sh
 ```
@@ -122,7 +122,7 @@ On a provider that takes a boot script, the same installer works at first boot:
 ```yaml
 #cloud-config
 runcmd:
-  - [ bash, -c, "curl -fsSL https://raw.githubusercontent.com/blackboxai-dev/gpu-verified-image/main/install.sh | GPU_VERIFY_URL=https://your-verifier.example.com/verify GPU_RUN_TOKEN=… bash" ]
+  - [ bash, -c, "curl -fsSL https://raw.githubusercontent.com/savarana-datta-r/gpu_verified_image/main/install.sh | GPU_VERIFY_URL=https://your-verifier.example.com/verify GPU_RUN_TOKEN=… bash" ]
 ```
 
 ---
@@ -244,7 +244,7 @@ Every image carries its commit, build time, source repository and a link to
 these docs in its OCI labels:
 
 ```sh
-docker buildx imagetools inspect ghcr.io/blackboxai-dev/gpu-verified:cuda12.4 \
+docker buildx imagetools inspect ghcr.io/savarana-datta-r/gpu-verified:cuda12.4 \
   --format '{{json .Image}}'
 ```
 

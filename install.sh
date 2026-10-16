@@ -6,13 +6,13 @@
 # where the machine is a container, use the image instead; it carries the same
 # gate and this script has no init system to work with.
 #
-#   curl -fsSL https://raw.githubusercontent.com/blackboxai-dev/gpu-verified-image/main/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/savarana-datta-r/gpu_verified_image/main/install.sh \
 #     | sudo GPU_VERIFY_URL=https://… GPU_RUN_TOKEN=… bash
 #
 # Idempotent: running it twice leaves the machine in the same state.
 set -uo pipefail
 
-GATE_URL="${GATE_URL:-https://raw.githubusercontent.com/blackboxai-dev/gpu-verified-image/main/gpu-gate}"
+GATE_URL="${GATE_URL:-https://raw.githubusercontent.com/savarana-datta-r/gpu_verified_image/main/gpu-gate}"
 VERIFY_URL="${GPU_VERIFY_URL:-}"
 RUN_TOKEN="${GPU_RUN_TOKEN:-}"
 FAILMODE="${GPU_FAILMODE:-open}"
