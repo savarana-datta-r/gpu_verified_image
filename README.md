@@ -8,7 +8,7 @@ through untouched. The result is a record of who actually logged in, rather
 than a record of who was given a key.
 
 ```
-ghcr.io/savarana-datta-r/gpu-verified:cuda12.4
+ghcr.io/savarana-datta-r/gpu-verified-image:cuda12.4
 ```
 
 ## Two ways to use it
@@ -29,7 +29,7 @@ docker run -d --gpus all -p 2222:22 \
   -e PUBLIC_KEY="$(cat ~/.ssh/id_ed25519.pub)" \
   -e GPU_VERIFY_URL="https://your-verifier.example.com/verify" \
   -e GPU_RUN_TOKEN="…" \
-  ghcr.io/savarana-datta-r/gpu-verified:cuda12.4
+  ghcr.io/savarana-datta-r/gpu-verified-image:cuda12.4
 
 ssh -p 2222 root@localhost
 ```
@@ -63,7 +63,7 @@ Jupyter — this is the `runtime` base, not `devel`. The image exists to carry
 the gate. A workload that needs a toolchain should build on top of it:
 
 ```dockerfile
-FROM ghcr.io/savarana-datta-r/gpu-verified:cuda12.4
+FROM ghcr.io/savarana-datta-r/gpu-verified-image:cuda12.4
 RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
  && rm -rf /var/lib/apt/lists/*
 ```
@@ -244,7 +244,7 @@ Every image carries its commit, build time, source repository and a link to
 these docs in its OCI labels:
 
 ```sh
-docker buildx imagetools inspect ghcr.io/savarana-datta-r/gpu-verified:cuda12.4 \
+docker buildx imagetools inspect ghcr.io/savarana-datta-r/gpu-verified-image:cuda12.4 \
   --format '{{json .Image}}'
 ```
 

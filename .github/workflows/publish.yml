@@ -49,12 +49,12 @@ jobs:
             REVISION=${{ github.sha }}
             CREATED=${{ steps.meta.outputs.created }}
             DOCS_REF=${{ github.sha }}
-          tags: ghcr.io/${{ github.repository_owner }}/gpu-verified:cuda12.4
+          tags: ghcr.io/${{ github.repository_owner }}/gpu-verified-image:cuda12.4
 
       - name: Scan (reports HIGH/CRITICAL; does not block)
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/gpu-verified:cuda12.4
+          image-ref: ghcr.io/${{ github.repository_owner }}/gpu-verified-image:cuda12.4
           severity: HIGH,CRITICAL
           exit-code: "0"
           ignore-unfixed: true
@@ -70,6 +70,6 @@ jobs:
             CREATED=${{ steps.meta.outputs.created }}
             DOCS_REF=${{ github.sha }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/gpu-verified:cuda12.4
-            ghcr.io/${{ github.repository_owner }}/gpu-verified:latest
-            ghcr.io/${{ github.repository_owner }}/gpu-verified:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/gpu-verified-image:cuda12.4
+            ghcr.io/${{ github.repository_owner }}/gpu-verified-image:latest
+            ghcr.io/${{ github.repository_owner }}/gpu-verified-image:${{ github.sha }}

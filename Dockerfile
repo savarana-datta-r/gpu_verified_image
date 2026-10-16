@@ -6,7 +6,7 @@
 # baked in here and wired up by the entrypoint from environment supplied at
 # launch.
 #
-#   docker build -t ghcr.io/savarana-datta-r/gpu-verified:cuda12.4 .
+#   docker build -t ghcr.io/savarana-datta-r/gpu-verified-image:cuda12.4 .
 #
 # The entrypoint reads, from the container environment:
 #   PUBLIC_KEY       the renter's SSH public key
