@@ -1,0 +1,150 @@
+#!/bin/sh
+# gpu-gate — the gateway's per-login SSH verification, run as sshd ForceCommand.
+#
+# sshd runs this INSTEAD of the requested command, after authentication, on the
+# session's own terminal — which is why it can prompt (pam_exec cannot). It then
+# either hands control to what the client actually wanted, or refuses.
+#
+# WHAT GETS CHALLENGED. Anything with a terminal, since a terminal is what can
+# answer a prompt. Everything without one passes through untouched —
+# scp/sftp/rsync cannot be prompted and gating them would break every transfer:
+#   no tty, command set                 -> `ssh host cmd`, old scp, rsync: exec it
+#   no tty, no command                  -> sftp subsystem or `ssh -T`: exec sftp-server
+#   a tty (command or not)              -> CHALLENGE, then run what was asked for
+#
+# The tty is tested before the command. The other way round, `ssh -tt host
+# bash -i` passed through: an interactive shell, unchallenged and unrecorded.
+#
+# NOT a security boundary: the tenant has sudo and can remove this line from
+# sshd_config. It verifies and records who logs in; it does not confine them.
+
+set -u
+CONF=/etc/gpu-gateway/verify.env
+# Log to syslog, not a file: the gate runs as the unprivileged login user
+# under ForceCommand and cannot write a root-owned log — and a failed
+# redirection would leak onto the user's own terminal.
+log() { logger -t gpu-gate -- "$*" 2>/dev/null || true; }
+
+login_shell() {
+  SH=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)
+  [ -n "$SH" ] || SH=/bin/bash
+  exec "$SH" -l
+}
+sftp_server() {
+  for p in /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server /usr/lib/sftp-server; do
+    [ -x "$p" ] && exec "$p"
+  done
+  exec internal-sftp 2>/dev/null || { echo "sftp unavailable" >&2; exit 1; }
+}
+# Run what the client asked for. Used by every allowed outcome, so a requested
+# command is honoured rather than replaced by a shell.
+proceed() {
+  if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+    exec ${SHELL:-/bin/sh} -c "$SSH_ORIGINAL_COMMAND"
+  fi
+  login_shell
+}
+# For when the login CANNOT BE CHECKED: the gateway is unreachable, or the
+# config is too incomplete to reach it. Never for a gateway that answered "no" —
+# a blip must not lock a customer out, a wrong code must not let anyone in.
+# Defined here, not below, because the config read calls it.
+failmode_exit() {
+  if [ "${FAILMODE:-open}" = "closed" ]; then
+    log "cannot verify, failmode=closed -> DENY"
+    echo "Login verification is unavailable and this machine is set to fail closed." >&2
+    exit 1
+  fi
+  log "cannot verify, failmode=open -> allow (unverified)"
+  proceed
+}
+
+# ── pass-through cases: no terminal, so nothing could answer a prompt ───────
+if ! tty -s; then
+  # A requested command (remote exec, old-style scp, rsync): run it verbatim.
+  if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+    log "passthrough cmd (user=$(id -un) host=${SSH_CLIENT%% *})"
+    proceed
+  fi
+  # No command either: sftp subsystem, or `ssh -T`. Hand to sftp-server.
+  log "passthrough no-tty (sftp/ -T) (user=$(id -un))"
+  sftp_server
+fi
+
+# ── a terminal is attached: this is what we gate ────────────────────────────
+# Printed before any config read, fingerprint work or network call, so it shows the moment the shell is requested.
+printf '\nVerifying this login. Sending a one-time code...\n' >&2
+
+# No config file: the fail policy lives in it, so there is none to honour. Allow.
+[ -r "$CONF" ] || { log "no config at $CONF -> allow unverified"; proceed; }
+. "$CONF"
+URL="${GPU_VERIFY_URL:-}"; TOKEN="${GPU_RUN_TOKEN:-}"; FAILMODE="${GPU_FAILMODE:-open}"
+# Read but unusable (blank URL or token). Here the policy IS known, so it
+# decides: this is the same "cannot verify" as an unreachable gateway, and
+# allowing it made fail-closed behave as fail-open.
+[ -n "$URL" ] && [ -n "$TOKEN" ] || { log "config incomplete -> failmode"; failmode_exit; }
+
+# The key sshd authenticated with. `ExposeAuthInfo yes` writes the auth lines
+# to a file and points SSH_USER_AUTH at it; the publickey line is
+# "publickey <algo> <base64>", from which ssh-keygen gives the SHA256 print.
+FP=""
+if [ -n "${SSH_USER_AUTH:-}" ] && [ -r "${SSH_USER_AUTH:-/nonexistent}" ]; then
+  KEY=$(awk '/^publickey /{print $2" "$3; exit}' "$SSH_USER_AUTH")
+  [ -n "$KEY" ] && FP=$(printf '%s\n' "$KEY" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}')
+fi
+RHOST="${SSH_CLIENT%% *}"; LUSER="$(id -un)"
+
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# POST and split the HTTP status from the body. curl's own failure (no
+# connection, timeout, DNS) leaves STATUS empty; a reached gateway sets it to
+# its code, however bad. The two are handled very differently below.
+BODY=""; STATUS=""
+call() {
+  BODY=$(curl -s -m 20 -w '\n%{http_code}' -X POST "$URL" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d "$1" 2>/dev/null)
+  STATUS=$(printf '%s' "$BODY" | tail -n1)
+  BODY=$(printf '%s' "$BODY" | sed '$d')
+  case "$STATUS" in 2*|4*|5*) : ;; *) STATUS="" ;; esac
+}
+
+# ── request a code ──────────────────────────────────────────────────────────
+call "{\"step\":\"request\",\"fingerprint\":\"$(esc "$FP")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
+if [ -z "$STATUS" ] || [ "${STATUS%%??}" = "5" ]; then
+  failmode_exit            # genuinely unreachable
+fi
+if [ "$STATUS" = "429" ]; then
+  # A code was sent moments ago and is still valid (the resend cooldown). Do
+  # NOT fail open on this — the code exists, so prompt for it.
+  printf '\nA login code was already emailed to the owner of this key; enter it.\n' >&2
+  log "code reused within cooldown (user=$LUSER host=$RHOST)"
+elif [ "$STATUS" = "202" ]; then
+  printf 'A 6-digit code has been emailed to this key'"'"'s owner. It can take a few seconds to arrive.\n' >&2
+  log "code requested (user=$LUSER host=$RHOST fp=$FP)"
+else
+  # Any other answer (e.g. 409: this key is registered to nobody we can email)
+  # means the login cannot be verified. The fail policy decides, as for unreachable.
+  log "request refused (status=$STATUS) -> failmode"
+  failmode_exit
+fi
+
+# ── prompt and verify ───────────────────────────────────────────────────────
+i=1
+while [ "$i" -le 3 ]; do
+  printf 'Enter the 6-digit code: ' >&2
+  IFS= read -r CODE || break
+  CODE=$(printf '%s' "$CODE" | tr -cd '0-9')
+  call "{\"step\":\"verify\",\"fingerprint\":\"$(esc "$FP")\",\"code\":\"$(esc "$CODE")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
+  if [ -z "$STATUS" ] || [ "${STATUS%%??}" = "5" ]; then
+    failmode_exit          # unreachable mid-verify: policy decides, NOT a deny
+  fi
+  case "$BODY" in
+    *'"verified":true'*) log "verified (user=$LUSER host=$RHOST)"; printf 'Verified.\n' >&2; proceed ;;
+  esac
+  # A reached gateway that said no (wrong/expired code, 4xx) is a real denial.
+  printf 'Incorrect or expired code.\n' >&2
+  i=$((i + 1))
+done
+log "denied after 3 attempts (user=$LUSER host=$RHOST)"
+echo "Login verification failed." >&2
+exit 1
