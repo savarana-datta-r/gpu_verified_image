@@ -138,7 +138,10 @@ while [ "$i" -le 3 ]; do
   if [ -z "$STATUS" ] || [ "${STATUS%%??}" = "5" ]; then
     failmode_exit          # unreachable mid-verify: policy decides, NOT a deny
   fi
-  case "$BODY" in
+  # Whitespace-insensitive. A verifier that pretty-prints its JSON answers
+  # `"verified": true`, and matching only the compact spelling would reject a
+  # correct code while the verifier's own log says it accepted one.
+  case "$(printf '%s' "$BODY" | tr -d ' \t\n')" in
     *'"verified":true'*) log "verified (user=$LUSER host=$RHOST)"; printf 'Verified.\n' >&2; proceed ;;
   esac
   # A reached gateway that said no (wrong/expired code, 4xx) is a real denial.

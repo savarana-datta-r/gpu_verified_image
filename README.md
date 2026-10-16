@@ -212,6 +212,26 @@ is a denial, and the gate re-prompts until three attempts are spent.
 
 ---
 
+## Trying it without a backend
+
+`demo-verifier.py` in this repository is a minimal verifier you can run on the
+machine itself. It prints each code to its own terminal instead of emailing
+it, so the whole round trip is visible on one screen.
+
+```sh
+python3 demo-verifier.py            # listens on 127.0.0.1:8080
+```
+
+Then install the gate pointing at it:
+
+```sh
+sudo GPU_VERIFY_URL="http://127.0.0.1:8080/verify" \
+     GPU_RUN_TOKEN="demo" GPU_FAILMODE=closed ./install.sh
+```
+
+Log in from a second terminal, read the code from the verifier's output, and
+type it in. Demo only: no key ownership, no persistence, no rate limiting.
+
 ## Guarantees and limits
 
 **A broken gate never locks anyone out.** Both paths validate the generated
