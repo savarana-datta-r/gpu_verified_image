@@ -1,11 +1,15 @@
 # gpu-verified-image
 
-Verified SSH logins for rented GPUs.
+Recorded SSH logins for rented GPUs.
 
-Every interactive SSH session into a machine running this gate is challenged
-with a one-time code. File transfers, remote commands and editor sessions pass
-through untouched. The result is a record of who actually logged in, rather
-than a record of who was given a key.
+Every interactive SSH session into a machine running this gate is reported to
+the verifier as it opens, and the session continues. File transfers, remote
+commands and editor sessions pass through untouched. The result is a record of
+who actually logged in, rather than a record of who was given a key.
+
+Nobody is asked for a code. The key `sshd` has already authenticated is the
+factor; the verifier's part is to say who that key belongs to and write it
+down.
 
 ```
 ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4
@@ -209,26 +213,27 @@ installer reads them from the environment of the `install.sh` invocation.
 
 ### What the three required values are
 
-**`GPU_VERIFY_URL`** is the HTTPS endpoint the gate calls to issue and check
-codes. The gate holds no secret and generates nothing itself: it asks this
-endpoint for a code, then asks whether the one typed back is correct. Any
-service implementing the two `POST` steps under
+**`GPU_VERIFY_URL`** is the HTTPS endpoint the gate reports each login to. The
+gate holds no secret and decides nothing itself: it says which key opened a
+session on which machine, and proceeds once the endpoint confirms it is
+recorded. Any service implementing the single `POST` under
 [The verifier API](#the-verifier-api) works. To try it with nothing to point
 at, run [`demo-verifier.py`](#trying-it-without-a-backend) on the machine and
 use `http://127.0.0.1:8080/verify`.
 
 **`GPU_RUN_TOKEN`** is a bearer token that tells the verifier *which machine*
 is calling. It is not a password you choose — whatever provisioned the
-machine issues it, one per run, and the verifier recognises it. That is how a
-code reaches the right person: the gate sends the fingerprint of the SSH key
-that just authenticated, and the verifier maps it to an owner. Without a
-token the verifier has no idea who is calling and refuses.
+machine issues it, one per run, and the verifier recognises it. That is how
+the record names the right person: the gate sends the fingerprint of the SSH
+key that just authenticated, and the verifier maps it to the owner it
+installed that key for. Without a token the verifier has no idea who is
+calling and refuses.
 
-**`GPU_FAILMODE`** decides what happens when the verifier **cannot be
-reached** — a timeout, a connection failure, a `5xx`. `open`, the default,
-lets the login through and records it unverified; `closed` refuses it. It
-never applies when the verifier answers and says no: a wrong code is always a
-denial under either setting. See [Fail policy](#fail-policy).
+**`GPU_FAILMODE`** decides what happens when the login **cannot be recorded** —
+a timeout, a connection failure, a `5xx`. `open`, the default, lets the login
+through with no record; `closed` refuses it. It never applies when the
+verifier answers an explicit refusal, which is a denial under either setting.
+See [Fail policy](#fail-policy).
 
 Two more exist for mirrors and air-gapped installs, both installer-only and
 rarely needed: `GATE_URL` and `BANNER_URL` override where the gate script and
@@ -242,38 +247,45 @@ No credentials are baked into the image. They arrive at launch.
 ## What happens on a login
 
 The gate runs as an `sshd` `ForceCommand`: after authentication, on the
-session's own terminal. That is why it can prompt at all — a PAM module
-cannot.
+session's own terminal.
 
-Only an interactive shell is challenged. Everything else passes through,
-because `scp`, `sftp`, `rsync` and editor remotes cannot answer a prompt and
-gating them would break every transfer.
+Only an interactive session is reported. Everything else passes through
+untouched, because a transfer is not a login and `scp`, `sftp` and `rsync`
+would break if the gate stood in their way.
 
 | Session | Behaviour |
 |---|---|
-| `ssh host <command>` | runs the command verbatim |
-| no TTY — sftp subsystem, `ssh -T` | hands off to `sftp-server` |
-| a TTY and no command | **challenged**, then execs the login shell |
+| `ssh host <command>` | runs the command verbatim, unreported |
+| no TTY — sftp subsystem, `ssh -T` | hands off to `sftp-server`, unreported |
+| a TTY and no command | **reported**, then execs the login shell |
 
-A challenged login gets three attempts. The gate reads the fingerprint of the
-key `sshd` authenticated with (via `ExposeAuthInfo`), asks the verifier to
-issue a code to that key's owner, and prompts for it.
+The gate reads the fingerprint of the key `sshd` authenticated with (via
+`ExposeAuthInfo`), tells the verifier a login opened, and proceeds as soon as
+the verifier confirms it is recorded. The exchange adds one HTTP round trip to
+the login and asks the person nothing.
+
+A key the verifier does not recognise is still let through. `sshd` has already
+authenticated it, and refusing would lock out a renter who added their own key
+to a machine they are paying for. The verifier records it as unidentified
+rather than naming the wrong person.
 
 The gate logs to syslog under the tag `gpu-gate`.
 
 ### Fail policy
 
-`GPU_FAILMODE` applies **only** when the verifier cannot be reached — a
-timeout, a connection failure, a 5xx. It is never applied when the verifier
-answers and says no.
+`GPU_FAILMODE` decides what happens when the login **cannot be recorded** — a
+timeout, a connection failure, a 5xx, or a config too incomplete to call out
+with.
 
 | What happened | `open` (default) | `closed` |
 |---|---|---|
-| Verifier unreachable | login allowed, recorded unverified | login refused |
-| Verifier answered "no" | **refused** | **refused** |
+| Verifier unreachable | login allowed, no record written | login refused |
+| Verifier answered an explicit refusal | **refused** | **refused** |
 
-A wrong code is never a network problem. Conflating the two would mean the
-default policy waved through every incorrect code.
+`open` is the default because a control-plane blip should not lock a renter out
+of a machine they are paying for. `closed` is for the case where a login that
+cannot be recorded is worse than no login at all. Either way the machine notes
+it in its own syslog.
 
 ---
 
@@ -285,14 +297,13 @@ above, and none of them need a verifier.
 On the **image**, with the container published on port 2222:
 
 ```sh
-# interactive login: the Blackbox banner, and the code prompt if a verifier
-# is configured
+# interactive login: the Blackbox banner, then a shell. No prompt
 ssh -p 2222 root@localhost
 
 # the GPU is visible inside the container (the driver is the host's)
 ssh -p 2222 root@localhost 'nvidia-smi --query-gpu=name,driver_version --format=csv'
 
-# a command passes through: no banner, no prompt, nothing but its own output
+# a command passes through: no banner, no report, nothing but its own output
 ssh -p 2222 root@localhost 'echo clean'
 
 # so does a transfer
@@ -313,7 +324,7 @@ session open while you test, so a mistake cannot lock you out:
 # the gate is loaded: both lines must appear
 sudo sshd -T | grep -iE '^forcecommand|^exposeauthinfo'
 
-# from a SECOND terminal, a fresh login is challenged
+# from a SECOND terminal, a fresh login is reported
 ssh <user>@<host>
 
 # a command is not
@@ -342,44 +353,46 @@ ssh -p 2222 root@localhost 'which jupyter-lab'
 To see a refusal rather than a pass, point `GPU_VERIFY_URL` at an unreachable
 address with `GPU_FAILMODE=closed`: the login is denied with
 `Login verification is unavailable and this machine is set to fail closed.`
+With the default `open` the same login proceeds, unrecorded.
 
 ## The verifier API
 
-The gate is not tied to any particular backend. Implement two `POST` calls at
+The gate is not tied to any particular backend. Implement one `POST` call at
 `GPU_VERIFY_URL` and it will work against your own service.
 
-Both requests carry `Authorization: Bearer $GPU_RUN_TOKEN` and
-`Content-Type: application/json`.
-
-**Step 1 — request a code**
+The request carries `Authorization: Bearer $GPU_RUN_TOKEN` and
+`Content-Type: application/json`:
 
 ```json
 { "step": "request", "fingerprint": "SHA256:…", "osUser": "root", "sourceIp": "203.0.113.9" }
 ```
 
-| Status | Meaning | Gate does |
-|---|---|---|
-| `202` | code issued | prompts for it |
-| `429` | a code was issued moments ago and is still valid | prompts for it, without resending |
-| other `4xx` | cannot verify this key (for example, no owner to notify) | applies the fail policy |
-| `5xx` or no response | verifier unreachable | applies the fail policy |
-
-**Step 2 — verify the code**
+Answer `200` with `"verified": true` in the body and the login proceeds:
 
 ```json
-{ "step": "verify", "fingerprint": "SHA256:…", "code": "123456", "osUser": "root", "sourceIp": "203.0.113.9" }
+{ "verified": true }
 ```
 
-Respond with `"verified": true` in the body to admit the login. Anything else
-is a denial, and the gate re-prompts until three attempts are spent.
+| Status | Meaning | Gate does |
+|---|---|---|
+| `200` with `"verified": true` | the login is recorded | opens the session |
+| other `4xx` | an explicit refusal | refuses the login |
+| `5xx` or no response | verifier unreachable | applies the fail policy |
+
+The `step` field is sent for compatibility with verifiers that still implement
+the older two-call handshake, where `request` issued a code and a second call
+checked it. A verifier that answers the first call with the allow is never
+asked again. A gate built against the older protocol receives `202` from such
+a verifier and prompts, which is why both shapes are worth accepting if you
+run a mixed fleet.
 
 ---
 
 ## Trying it without a backend
 
 `demo-verifier.py` in this repository is a minimal verifier you can run on the
-machine itself. It prints each code to its own terminal instead of emailing
-it, so the whole round trip is visible on one screen.
+machine itself. It prints each login to its own terminal and answers the
+allow, so the whole round trip is visible on one screen.
 
 ```sh
 python3 demo-verifier.py            # listens on 127.0.0.1:8080
@@ -392,8 +405,9 @@ sudo GPU_VERIFY_URL="http://127.0.0.1:8080/verify" \
      GPU_RUN_TOKEN="demo" GPU_FAILMODE=closed ./install.sh
 ```
 
-Log in from a second terminal, read the code from the verifier's output, and
-type it in. Demo only: no key ownership, no persistence, no rate limiting.
+Log in from a second terminal and watch the fingerprint, the OS user and the
+source address appear in the verifier's output as the session opens. Demo
+only: no key ownership, no persistence, no storage of any kind.
 
 ## Guarantees and limits
 

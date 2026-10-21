@@ -1,4 +1,4 @@
-# Verified-login GPU image, ML variant.
+# Recorded-login GPU image, ML variant.
 #
 # The slim image (Dockerfile) carries the login gate and nothing else. This one
 # adds the toolchain a Lambda Stack machine ships, so a renter who lands on it
@@ -73,7 +73,7 @@ ARG CREATED=""
 ARG VERSION="cuda12.4-ml"
 ARG DOCS_REF="main"
 LABEL org.opencontainers.image.title="Verified-login GPU image (ML)" \
-      org.opencontainers.image.description="CUDA 12.4 devel with cuDNN, PyTorch, TensorFlow, JupyterLab and a one-time-code SSH login gate." \
+      org.opencontainers.image.description="CUDA 12.4 devel with cuDNN, PyTorch, TensorFlow, JupyterLab and an SSH login gate that records each interactive login." \
       org.opencontainers.image.source="https://github.com/blackboxai-dev/gpu-verified-image" \
       org.opencontainers.image.documentation="https://github.com/blackboxai-dev/gpu-verified-image/blob/$DOCS_REF/README.md" \
       org.opencontainers.image.vendor="Blackbox AI" \

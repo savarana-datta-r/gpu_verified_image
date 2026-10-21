@@ -1,10 +1,10 @@
-# Verified-login GPU workload image.
+# Recorded-login GPU workload image.
 #
-# A CUDA runtime with sshd and a login gate that challenges every interactive
-# SSH session with a one-time code. Built for hosts where the machine is a
-# container and there is no post-boot hook to install the gate with: it is
-# baked in here and wired up by the entrypoint from environment supplied at
-# launch.
+# A CUDA runtime with sshd and a login gate that reports every interactive SSH
+# session to the gateway as it opens. No code is asked for. Built for hosts
+# where the machine is a container and there is no post-boot hook to install
+# the gate with: it is baked in here and wired up by the entrypoint from
+# environment supplied at launch.
 #
 #   docker build -t ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4 .
 #
@@ -59,7 +59,7 @@ ARG CREATED=""
 ARG VERSION="cuda12.4"
 ARG DOCS_REF="main"
 LABEL org.opencontainers.image.title="Verified-login GPU image" \
-      org.opencontainers.image.description="CUDA 12.4 runtime with sshd and a one-time-code SSH login gate, for GPU hosts that cannot run a post-boot hook." \
+      org.opencontainers.image.description="CUDA 12.4 runtime with sshd and an SSH login gate that records each interactive login, for GPU hosts that cannot run a post-boot hook." \
       org.opencontainers.image.source="https://github.com/blackboxai-dev/gpu-verified-image" \
       org.opencontainers.image.documentation="https://github.com/blackboxai-dev/gpu-verified-image/blob/$DOCS_REF/README.md" \
       org.opencontainers.image.vendor="Blackbox AI" \

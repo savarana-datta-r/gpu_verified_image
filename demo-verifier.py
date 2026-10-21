@@ -1,103 +1,78 @@
 #!/usr/bin/env python3
 """Minimal verifier for the gpu-verified-image login gate.
 
-Run it on the GPU machine itself. The gate calls it over loopback, and the
-code is printed here instead of emailed, so the whole round trip is visible
-on one screen.
+Run it on the GPU machine itself. The gate calls it over loopback as each
+interactive login opens, and the login is printed here, so the whole round
+trip is visible on one screen.
 
-    python3 verifier.py            # listens on 127.0.0.1:8080
+    python3 demo-verifier.py       # listens on 127.0.0.1:8080
 
 Then point the gate at it:
 
     GPU_VERIFY_URL=http://127.0.0.1:8080/verify
     GPU_RUN_TOKEN=demo
 
-Demo only. No persistence, no key ownership, no rate limiting.
+Demo only. It records nothing, checks nothing and admits every login: a real
+verifier resolves the fingerprint to the person the key was installed for and
+writes the session down. See "The verifier API" in README.md.
 """
 import json
-import random
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-TTL = timedelta(minutes=5)
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-
-# fingerprint -> (code, issued_at)
-ISSUED = {}
-
-
-def now():
-    return datetime.now()
 
 
 def stamp():
-    return now().strftime("%H:%M:%S")
+    return datetime.now().strftime("%H:%M:%S")
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # the prints below are the log
 
-    def _send(self, status, payload):
-        body = json.dumps(payload, separators=(",", ":")).encode()
+    def reply(self, status, body):
+        payload = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(payload)
 
     def do_POST(self):
-        auth = self.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
-            return self._send(401, {"error": "missing bearer token"})
-
+        length = int(self.headers.get("Content-Length") or 0)
         try:
-            raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-            body = json.loads(raw or b"{}")
-        except Exception:
-            return self._send(400, {"error": "bad json"})
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return self.reply(400, {"error": "body must be JSON"})
 
-        step = body.get("step")
-        fp = body.get("fingerprint") or "(no fingerprint)"
-        who = body.get("osUser", "?")
-        ip = body.get("sourceIp", "?")
+        # The token names the machine. A real verifier looks it up; this one
+        # only insists that the gate sent one, since a gate with no token is
+        # misconfigured and that is worth seeing on screen.
+        auth = self.headers.get("Authorization") or ""
+        if not auth.startswith("Bearer "):
+            print(f"[{stamp()}] refused: no run token")
+            return self.reply(401, {"error": "missing run token"})
 
-        if step == "request":
-            prev = ISSUED.get(fp)
-            if prev and now() - prev[1] < TTL:
-                code = prev[0]
-                print(f"\n[{stamp()}] login attempt  user={who}  from={ip}")
-                print(f"           key {fp}")
-                print(f"           code still valid:  >>>  {code}  <<<\n", flush=True)
-                # 429 tells the gate a code is already out: prompt, do not resend.
-                return self._send(429, {"error": "code already issued"})
+        fingerprint = body.get("fingerprint") or "(none)"
+        os_user = body.get("osUser") or "(unknown)"
+        source_ip = body.get("sourceIp") or "(unknown)"
+        if not body.get("fingerprint"):
+            # Without one there is nothing to attribute the login to. The gate
+            # sends it for every interactive session, so its absence is a
+            # fault rather than a login to wave through.
+            print(f"[{stamp()}] refused: no fingerprint")
+            return self.reply(400, {"error": "fingerprint is required"})
 
-            code = f"{random.randint(0, 999999):06d}"
-            ISSUED[fp] = (code, now())
-            print(f"\n[{stamp()}] login attempt  user={who}  from={ip}")
-            print(f"           key {fp}")
-            print(f"           CODE:  >>>  {code}  <<<   (valid 5 minutes)\n", flush=True)
-            return self._send(202, {"sent": True})
-
-        if step == "verify":
-            got = "".join(ch for ch in str(body.get("code", "")) if ch.isdigit())
-            rec = ISSUED.get(fp)
-            ok = bool(rec and rec[0] == got and now() - rec[1] < TTL)
-            print(f"[{stamp()}] code entered: {got or '(empty)'}  ->  "
-                  f"{'VERIFIED' if ok else 'REJECTED'}", flush=True)
-            if ok:
-                ISSUED.pop(fp, None)   # one use per code
-            return self._send(200 if ok else 401, {"verified": ok})
-
-        return self._send(400, {"error": "unknown step"})
+        print(f"[{stamp()}] login  user={os_user}  from={source_ip}  key={fingerprint}")
+        # `verified: true` is what the gate looks for to open the session. A
+        # `step` field may be present; this verifier answers the same way
+        # whatever it says, which is what keeps a gate built against the older
+        # two-call protocol from prompting for a code nobody issues.
+        self.reply(200, {"verified": True})
 
 
 if __name__ == "__main__":
-    print(f"verifier listening on 127.0.0.1:{PORT}")
-    print(f"  point the gate at  http://127.0.0.1:{PORT}/verify")
-    print("  codes appear below as logins are attempted. Ctrl-C to stop.\n", flush=True)
-    try:
-        HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
-    except KeyboardInterrupt:
-        print("\nstopped")
+    print(f"demo verifier on 127.0.0.1:{PORT}  (admits every login, records nothing)")
+    HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
