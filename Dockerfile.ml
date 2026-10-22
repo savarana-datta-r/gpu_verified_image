@@ -70,6 +70,15 @@ RUN chmod 0755 /etc/blackbox/render-motd.sh \
  && chmod 0644 /etc/ssh/sshd_config.d/10-motd.conf
 
 EXPOSE 22 8888
+
+# Readiness. A launcher otherwise has to poll the SSH port blindly and guess
+# whether a refused connection means "still pulling" or "never coming up".
+# `sshd -t` checks the configuration; the port check is what says it is
+# listening. start-period is generous here because this image is roughly 20 GB
+# unpacked and a cold pull takes minutes.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=60 \
+  CMD /usr/sbin/sshd -t && (exec 3<>/dev/tcp/127.0.0.1/22) || exit 1
+
 ENTRYPOINT ["/usr/local/sbin/gpu-entrypoint"]
 
 ARG REVISION=""

@@ -53,6 +53,15 @@ RUN chmod 0755 /etc/blackbox/render-motd.sh \
  && chmod 0644 /etc/ssh/sshd_config.d/10-motd.conf
 
 EXPOSE 22
+
+# Readiness. A launcher otherwise has to poll the SSH port blindly and guess
+# whether a refused connection means "still pulling" or "never coming up".
+# `sshd -t` checks the configuration; the port check is what says it is
+# listening. start-period covers the entrypoint writing host keys on a machine
+# whose image was built without them.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=30 \
+  CMD /usr/sbin/sshd -t && (exec 3<>/dev/tcp/127.0.0.1/22) || exit 1
+
 ENTRYPOINT ["/usr/local/sbin/gpu-entrypoint"]
 
 # Metadata last, so a changing revision never invalidates the layers above.
