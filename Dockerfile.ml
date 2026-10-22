@@ -73,11 +73,14 @@ EXPOSE 22 8888
 
 # Readiness. A launcher otherwise has to poll the SSH port blindly and guess
 # whether a refused connection means "still pulling" or "never coming up".
-# `sshd -t` checks the configuration; the port check is what says it is
-# listening. start-period is generous here because this image is roughly 20 GB
-# unpacked and a cold pull takes minutes.
+# `sshd -t` checks the configuration; ssh-keyscan is what says it is actually
+# serving, since it completes a protocol handshake rather than only opening a
+# socket. Exec form with an explicit interpreter: the shell form runs under
+# /bin/sh, which is dash here, and a bash-only probe such as /dev/tcp fails on
+# every check. start-period is generous here because this image is
+# roughly 20 GB unpacked and a cold pull takes minutes.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=60 \
-  CMD /usr/sbin/sshd -t && (exec 3<>/dev/tcp/127.0.0.1/22) || exit 1
+  CMD ["/bin/sh", "-c", "/usr/sbin/sshd -t && ssh-keyscan -T 3 -p 22 127.0.0.1 >/dev/null 2>&1"]
 
 ENTRYPOINT ["/usr/local/sbin/gpu-entrypoint"]
 
