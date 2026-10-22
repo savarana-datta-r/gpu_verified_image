@@ -13,7 +13,11 @@
 #   GPU_VERIFY_URL   the verification endpoint
 #   GPU_RUN_TOKEN    the per-run bearer token
 #   GPU_FAILMODE     open | closed
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# The base is pinned by digest, not by tag. `12.4.1-runtime-ubuntu22.04` is
+# republished upstream, so building the same commit twice against the tag can
+# produce two different images. Repin deliberately: resolve the tag, read
+# docker-content-digest, and update the line below in its own commit.
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04@sha256:517da2300c184c9999ec203c2665244bdebd3578d12fcc7065e83667932643d9
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-server curl ca-certificates \

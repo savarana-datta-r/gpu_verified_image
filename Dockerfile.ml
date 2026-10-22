@@ -11,7 +11,11 @@
 #     rebuilds: pin them here if that matters more than being current.
 #
 #   docker build -f Dockerfile.ml -t gpu-verified-image:ml .
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+# The base is pinned by digest, not by tag. `12.4.1-cudnn-devel-ubuntu22.04` is
+# republished upstream, so building the same commit twice against the tag can
+# produce two different images. Repin deliberately: resolve the tag, read
+# docker-content-digest, and update the line below in its own commit.
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04@sha256:622e78a1d02c0f90ed900e3985d6c975d8e2dc9ee5e61643aed587dcf9129f42
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_NO_CACHE_DIR=1
