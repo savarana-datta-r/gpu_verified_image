@@ -112,6 +112,36 @@ jobs:
             --tag $img:latest${{ steps.tag.outputs.alias }} \
             $img:${{ github.sha }}${{ steps.tag.outputs.suffix }}
 
+      # Pull what was just published and compare the files inside it with the
+      # files in this commit. A build can succeed while shipping something
+      # other than what was committed - a stale cached layer, a bad COPY path,
+      # a tag pushed from the wrong ref - and nothing downstream would notice
+      # until a machine behaved oddly. That happened: a published image kept
+      # an old gate for a day after the source changed.
+      - name: Published image matches this commit
+        run: |
+          set -eu
+          ref=ghcr.io/${{ github.repository_owner }}/gpu-verified-image:${{ github.sha }}${{ steps.tag.outputs.suffix }}
+          docker pull -q "$ref"
+          cid=$(docker create "$ref")
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for pair in \
+            "gpu-gate:/usr/local/sbin/gpu-gate" \
+            "entrypoint.sh:/usr/local/sbin/gpu-entrypoint" \
+            "render-motd.sh:/etc/blackbox/render-motd.sh"; do
+            src=${pair%%:*}; dst=${pair#*:}
+            [ -f "$src" ] || continue
+            docker cp "$cid:$dst" ./in-image \
+              || { echo "FAIL: $dst is missing from the image"; exit 1; }
+            if ! cmp -s "$src" ./in-image; then
+              echo "FAIL: $dst in the image differs from $src in this commit"
+              diff -u "$src" ./in-image | head -40
+              exit 1
+            fi
+            echo "ok  $dst matches $src"
+            rm -f ./in-image
+          done
+
   ml:
     runs-on: ubuntu-latest
     steps:
