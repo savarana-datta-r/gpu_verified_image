@@ -30,6 +30,18 @@
 
 set -u
 CONF=/etc/gpu-gateway/verify.env
+
+# What this gate speaks, sent on every call and carried in the User-Agent.
+#
+# 1  the original: the verifier issues a code and the gate prompts for it
+# 2  this one: the verifier records the login and answers the allow
+#
+# It exists because the two were deployed out of step once. A gate built for
+# 1 met a verifier speaking 2, did not recognise the answer, and fell to its
+# fail policy - allowed under `open`, denied under `closed`. A verifier that
+# reads this can answer in the shape the caller understands instead of
+# assuming both sides were updated together.
+GATE_VERSION=2
 # Log to syslog, not a file: the gate runs as the unprivileged login user
 # under ForceCommand and cannot write a root-owned log — and a failed
 # redirection would leak onto the user's own terminal.
@@ -122,8 +134,12 @@ esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # its code, however bad. The two are handled very differently below.
 BODY=""; STATUS=""
 call() {
-  BODY=$(curl -s -m 20 -w '\n%{http_code}' -X POST "$URL" \
+  # 20s was long enough to be felt on every login when the verifier was slow,
+  # and it is spent before the fail policy is even consulted. 8s is past the
+  # tail of a healthy round trip and short enough not to read as a hang.
+  BODY=$(curl -s -m 8 -w '\n%{http_code}' -X POST "$URL" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -H "User-Agent: gpu-gate/$GATE_VERSION" \
     -d "$1" 2>/dev/null)
   STATUS=$(printf '%s' "$BODY" | tail -n1)
   BODY=$(printf '%s' "$BODY" | sed '$d')
@@ -131,7 +147,7 @@ call() {
 }
 
 # ── tell the gateway a login opened ─────────────────────────────────────────
-call "{\"step\":\"request\",\"fingerprint\":\"$(esc "$FP")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
+call "{\"step\":\"request\",\"gateVersion\":$GATE_VERSION,\"fingerprint\":\"$(esc "$FP")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
 if [ -z "$STATUS" ] || [ "${STATUS%%??}" = "5" ]; then
   failmode_exit            # genuinely unreachable
 fi
@@ -167,7 +183,7 @@ while [ "$i" -le 3 ]; do
   printf 'Enter the 6-digit code: ' >&2
   IFS= read -r CODE || break
   CODE=$(printf '%s' "$CODE" | tr -cd '0-9')
-  call "{\"step\":\"verify\",\"fingerprint\":\"$(esc "$FP")\",\"code\":\"$(esc "$CODE")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
+  call "{\"step\":\"verify\",\"gateVersion\":$GATE_VERSION,\"fingerprint\":\"$(esc "$FP")\",\"code\":\"$(esc "$CODE")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
   if [ -z "$STATUS" ] || [ "${STATUS%%??}" = "5" ]; then
     failmode_exit          # unreachable mid-verify: policy decides, NOT a deny
   fi
