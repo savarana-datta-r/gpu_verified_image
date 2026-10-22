@@ -4,11 +4,21 @@
 # providers, compressed into a container start.
 set -u
 
-# 1. the renter's key -> root's authorized_keys (RunPod/Vast convention)
-if [ -n "${PUBLIC_KEY:-}" ]; then
+# 1. the renter's keys -> root's authorized_keys (RunPod/Vast convention)
+#
+# PUBLIC_KEY is the name both providers use and stays the primary. Either
+# variable may carry SEVERAL keys, one per line, so a launch can admit a
+# person and a CI runner without a second machine. PUBLIC_KEYS is accepted as
+# the plural spelling people reach for; both are read and the result is
+# deduplicated, since the same key arriving twice would otherwise be two
+# identical lines.
+if [ -n "${PUBLIC_KEY:-}" ] || [ -n "${PUBLIC_KEYS:-}" ]; then
   mkdir -p /root/.ssh && chmod 700 /root/.ssh
-  printf '%s\n' "$PUBLIC_KEY" > /root/.ssh/authorized_keys
+  printf '%s\n%s\n' "${PUBLIC_KEY:-}" "${PUBLIC_KEYS:-}" \
+    | grep -v '^[[:space:]]*$' \
+    | awk '!seen[$0]++' > /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
+  echo "gpu-entrypoint: $(wc -l < /root/.ssh/authorized_keys | tr -d ' ') authorized key(s) installed" >&2
 fi
 
 # 2. the gateway's verify config, when the launch asked for it
