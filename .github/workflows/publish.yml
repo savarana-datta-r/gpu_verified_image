@@ -53,6 +53,15 @@ jobs:
           [ -f uninstall.sh ] && bash -n uninstall.sh
           true
 
+      # The gate, run for real against demo-verifier.py. Parsing it only proved
+      # it was valid shell; a gate that parses and then denies every login, or
+      # prompts for a code nobody issues, reached a published image once.
+      # Both fail policies are exercised, because the difference between them
+      # is exactly what went wrong.
+      - name: Gate opens a session against the verifier
+        if: hashFiles('gpu-gate') != ''
+        run: ./ci/gate-test.sh
+
       - name: Build timestamp
         id: meta
         run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
