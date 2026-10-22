@@ -12,8 +12,14 @@ factor; the verifier's part is to say who that key belongs to and write it
 down.
 
 ```
-ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4
+ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4-gate     # this branch
+ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4-otp      # the same image, older name
 ```
+
+Both names are published from every build of this branch and point at the same
+image. `-otp` is historical: the gate records a login and asks for no one-time
+password, so `-gate` is the name to use. The plain image, with no gate at all,
+is `:cuda12.4` on the `main` branch.
 
 ## Two ways to use it
 
@@ -205,7 +211,8 @@ sudo GPU_VERIFY_URL="…" GPU_RUN_TOKEN="…" GPU_BANNER=0 ./install.sh
 | `GPU_VERIFY_URL` | both | yes | The verification endpoint. |
 | `GPU_RUN_TOKEN` | both | yes | Bearer token for that endpoint, scoped to one machine run. |
 | `GPU_FAILMODE` | both | no | `open` (default) or `closed`. See [Fail policy](#fail-policy). |
-| `PUBLIC_KEY` | image | no | The renter's SSH public key, written to `/root/.ssh/authorized_keys`. Omit it if the host installs keys itself. |
+| `PUBLIC_KEY` | image | no | The renter's SSH public key, written to `/root/.ssh/authorized_keys`. May carry several keys, one per line. Omit it if the host installs keys itself. |
+| `PUBLIC_KEYS` | image | no | Read alongside `PUBLIC_KEY` and merged with it, for callers that reach for the plural. Duplicates are collapsed. |
 | `GPU_BANNER` | installer | no | `0` skips the Blackbox welcome banner. On by default, as it is in the image. See [Branding](#branding). |
 
 The image reads its values from the container environment at launch; the
@@ -236,9 +243,9 @@ verifier answers an explicit refusal, which is a denial under either setting.
 See [Fail policy](#fail-policy).
 
 Two more exist for mirrors and air-gapped installs, both installer-only and
-rarely needed: `GATE_URL` and `BANNER_URL` override where the gate script and
-the banner are fetched from. If a `gpu-gate` or `motd` file is present in the
-working directory, it is used in preference to either.
+rarely needed: `GATE_URL` and `RENDER_URL` override where the gate script and
+the banner renderer are fetched from. If a `gpu-gate` or `render-motd.sh` file
+is present in the working directory, it is used in preference to either.
 
 No credentials are baked into the image. They arrive at launch.
 
@@ -360,12 +367,21 @@ With the default `open` the same login proceeds, unrecorded.
 The gate is not tied to any particular backend. Implement one `POST` call at
 `GPU_VERIFY_URL` and it will work against your own service.
 
-The request carries `Authorization: Bearer $GPU_RUN_TOKEN` and
-`Content-Type: application/json`:
+The request carries `Authorization: Bearer $GPU_RUN_TOKEN`,
+`Content-Type: application/json` and `User-Agent: gpu-gate/<version>`:
 
 ```json
-{ "step": "request", "fingerprint": "SHA256:…", "osUser": "root", "sourceIp": "203.0.113.9" }
+{ "step": "request", "gateVersion": 2, "fingerprint": "SHA256:…", "osUser": "root", "sourceIp": "203.0.113.9" }
 ```
+
+`gateVersion` says which protocol the caller speaks — `1` expects a code to be
+issued and prompts for it, `2` expects the login to be recorded and the allow
+returned. It is in the body as well as the `User-Agent` because a router in
+front of a verifier may drop headers. A verifier that reads it can answer in
+the shape the caller understands instead of assuming both sides were deployed
+together; one that ignores it behaves exactly as before.
+
+The gate waits 8 seconds for an answer before applying the fail policy.
 
 Answer `200` with `"verified": true` in the body and the login proceeds:
 
