@@ -22,16 +22,27 @@ jobs:
       - uses: actions/checkout@v5
 
       # Tag suffix per branch, so the two images never overwrite each other.
-      #   main       -> the plain image: cuda12.4, latest, cuda12.4-ml, ml
-      #   image_otp  -> the gated image: the same names with -otp
+      #   main                   -> the plain image: cuda12.4, latest, …
+      #   image_otp / image_gate -> the gated image: the same names, suffixed
+      #
+      # The gated branch publishes under BOTH -otp and -gate. -otp is the
+      # historical name, kept so nothing pointing at it breaks; -gate is what
+      # the image actually is, since the gate records a login and asks for no
+      # one-time password. Once every consumer reads -gate, the -otp half of
+      # this can go.
       - name: Tag suffix
         id: tag
         run: |
-          if [ "${GITHUB_REF_NAME}" = "image_otp" ]; then
-            echo "suffix=-otp" >> "$GITHUB_OUTPUT"
-          else
-            echo "suffix=" >> "$GITHUB_OUTPUT"
-          fi
+          case "${GITHUB_REF_NAME}" in
+            image_otp|image_gate)
+              echo "suffix=-otp" >> "$GITHUB_OUTPUT"
+              echo "alias=-gate" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "suffix=" >> "$GITHUB_OUTPUT"
+              echo "alias=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       - name: Shell scripts parse
         run: |
@@ -88,6 +99,48 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/gpu-verified-image:latest${{ steps.tag.outputs.suffix }}
             ghcr.io/${{ github.repository_owner }}/gpu-verified-image:${{ github.sha }}${{ steps.tag.outputs.suffix }}
 
+      # Published by retagging rather than inside the tags: block above, so
+      # that block stays plain YAML with no conditional expression in it.
+      - name: Publish the -gate alias
+        if: steps.tag.outputs.alias != ''
+        run: |
+          set -eu
+          owner=${{ github.repository_owner }}
+          img=ghcr.io/$owner/gpu-verified-image
+          docker buildx imagetools create \
+            --tag $img:cuda12.4${{ steps.tag.outputs.alias }} \
+            --tag $img:latest${{ steps.tag.outputs.alias }} \
+            $img:${{ github.sha }}${{ steps.tag.outputs.suffix }}
+
+      # Pull what was just published and compare the files inside it with the
+      # files in this commit. A build can succeed while shipping something
+      # other than what was committed - a stale cached layer, a bad COPY path,
+      # a tag pushed from the wrong ref - and nothing downstream would notice
+      # until a machine behaved oddly. That happened: a published image kept
+      # an old gate for a day after the source changed.
+      - name: Published image matches this commit
+        run: |
+          set -eu
+          ref=ghcr.io/${{ github.repository_owner }}/gpu-verified-image:${{ github.sha }}${{ steps.tag.outputs.suffix }}
+          docker pull -q "$ref"
+          cid=$(docker create "$ref")
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for pair in \
+            "entrypoint.sh:/usr/local/sbin/gpu-entrypoint" \
+            "render-motd.sh:/etc/blackbox/render-motd.sh"; do
+            src=${pair%%:*}; dst=${pair#*:}
+            [ -f "$src" ] || continue
+            docker cp "$cid:$dst" ./in-image \
+              || { echo "FAIL: $dst is missing from the image"; exit 1; }
+            if ! cmp -s "$src" ./in-image; then
+              echo "FAIL: $dst in the image differs from $src in this commit"
+              diff -u "$src" ./in-image | head -40
+              exit 1
+            fi
+            echo "ok  $dst matches $src"
+            rm -f ./in-image
+          done
+
   ml:
     runs-on: ubuntu-latest
     steps:
@@ -96,11 +149,16 @@ jobs:
       - name: Tag suffix
         id: tag
         run: |
-          if [ "${GITHUB_REF_NAME}" = "image_otp" ]; then
-            echo "suffix=-otp" >> "$GITHUB_OUTPUT"
-          else
-            echo "suffix=" >> "$GITHUB_OUTPUT"
-          fi
+          case "${GITHUB_REF_NAME}" in
+            image_otp|image_gate)
+              echo "suffix=-otp" >> "$GITHUB_OUTPUT"
+              echo "alias=-gate" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "suffix=" >> "$GITHUB_OUTPUT"
+              echo "alias=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       # The ML image lands around 15-20 GB and a runner has roughly 14 GB free
       # on the root disk, where Docker keeps its layers. These four directories
@@ -140,3 +198,14 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/gpu-verified-image:cuda12.4-ml${{ steps.tag.outputs.suffix }}
             ghcr.io/${{ github.repository_owner }}/gpu-verified-image:ml${{ steps.tag.outputs.suffix }}
+
+      - name: Publish the -gate alias
+        if: steps.tag.outputs.alias != ''
+        run: |
+          set -eu
+          owner=${{ github.repository_owner }}
+          img=ghcr.io/$owner/gpu-verified-image
+          docker buildx imagetools create \
+            --tag $img:cuda12.4-ml${{ steps.tag.outputs.alias }} \
+            --tag $img:ml${{ steps.tag.outputs.alias }} \
+            $img:ml${{ steps.tag.outputs.suffix }}

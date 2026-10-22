@@ -8,10 +8,17 @@
 set -u
 
 # 1. the renter's key -> root's authorized_keys (RunPod/Vast convention)
-if [ -n "${PUBLIC_KEY:-}" ]; then
+# Either variable may carry SEVERAL keys, one per line, so a launch can admit
+# a person and a CI runner without a second machine. PUBLIC_KEY is the name
+# RunPod and Vast both use and stays the primary; PUBLIC_KEYS is the plural
+# spelling people reach for. Both are read and duplicates are collapsed.
+if [ -n "${PUBLIC_KEY:-}" ] || [ -n "${PUBLIC_KEYS:-}" ]; then
   mkdir -p /root/.ssh && chmod 700 /root/.ssh
-  printf '%s\n' "$PUBLIC_KEY" > /root/.ssh/authorized_keys
+  printf '%s\n%s\n' "${PUBLIC_KEY:-}" "${PUBLIC_KEYS:-}" \
+    | grep -v '^[[:space:]]*$' \
+    | awk '!seen[$0]++' > /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
+  echo "gpu-entrypoint: $(wc -l < /root/.ssh/authorized_keys | tr -d ' ') authorized key(s) installed" >&2
 fi
 
 # 2. the login banner, rendered from what this launch knows.

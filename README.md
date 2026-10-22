@@ -42,7 +42,8 @@ NVIDIA container runtime are required for `nvidia-smi` to work inside.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `PUBLIC_KEY` | yes | the SSH public key written to `/root/.ssh/authorized_keys` |
+| `PUBLIC_KEY` | yes | the SSH public key written to `/root/.ssh/authorized_keys`. May carry several keys, one per line |
+| `PUBLIC_KEYS` | no | read alongside `PUBLIC_KEY` and merged with it, for callers that reach for the plural. Duplicates are collapsed |
 | `BLACKBOX_HOST` | no | hostname shown on the banner; defaults to the container's |
 | `BLACKBOX_GPU` | no | GPU label shown on the banner; the renderer reads it from `nvidia-smi` when unset |
 | `BLACKBOX_LOGIN` | no | login name shown on the banner; defaults to `root` |
@@ -73,6 +74,9 @@ distribution banner does not print above ours.
 ```sh
 # the banner, then a shell — no prompt, no verification
 ssh -p 2222 root@localhost
+
+# readiness, rather than polling the SSH port and guessing
+docker inspect --format '{{.State.Health.Status}}' <container>
 
 # the GPU is visible inside the container (the driver is the host's)
 ssh -p 2222 root@localhost nvidia-smi
@@ -109,7 +113,13 @@ docker build -t ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4-ml -f Dockerf
 ```
 
 CI supplies `REVISION` and `CREATED` as build arguments. A local build leaves
-them empty rather than stamping a provenance it cannot vouch for.
+them empty rather than stamping a provenance it cannot vouch for. The bases are
+pinned by digest, so the same commit rebuilds to the same image; repin by
+resolving the tag and updating the `FROM` line in its own commit.
+
+After publishing, CI pulls the immutable commit-sha tag back and compares the
+files inside it with the files in the tree, so a build cannot quietly ship
+something other than what was committed.
 
 Pushing to this branch republishes `cuda12.4`, `cuda12.4-ml`, `ml` and
 `latest`. Pushing to `image_otp` republishes the same names with `-otp`.
