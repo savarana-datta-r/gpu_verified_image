@@ -48,18 +48,14 @@ GATE_VERSION=2
 log() { logger -t gpu-gate -- "$*" 2>/dev/null || true; }
 
 login_shell() {
-  # A banner the IMAGE ships. Printed here because sshd's PrintMotd never
-  # fires under a ForceCommand, and read from a path only the image provides,
-  # so the installer path does not print a second banner over the host's own.
-  # Shell sessions only: a command or an sftp transfer never reaches here.
   # pam_motd never runs under a ForceCommand, so the banner is printed here.
-  # The rendered one first; the old static file is the fallback for a machine
-  # built before branding shipped.
-  if [ -x /etc/blackbox/render-motd.sh ]; then
-    /etc/blackbox/render-motd.sh >&2 2>/dev/null
-  elif [ -r /etc/gpu-gateway/banner ]; then
-    cat /etc/gpu-gateway/banner >&2
-  fi
+  # Shell sessions only: a command or an sftp transfer never reaches this.
+  #
+  # The renderer is the only source. The static /etc/gpu-gateway/banner it used
+  # to fall back to was for machines built before branding shipped; every image
+  # and every installer has carried render-motd.sh since, so the fallback could
+  # only ever print a stale banner on a machine that already had a current one.
+  [ -x /etc/blackbox/render-motd.sh ] && /etc/blackbox/render-motd.sh >&2 2>/dev/null
   SH=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)
   [ -n "$SH" ] || SH=/bin/bash
   exec "$SH" -l

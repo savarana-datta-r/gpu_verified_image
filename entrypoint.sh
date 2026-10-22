@@ -34,9 +34,8 @@ fi
 
 # 3. the login banner, rendered from what this launch knows.
 #    The static /etc/motd baked at build time is the fallback; this overwrites
-#    it with the machine's real host, GPU and login. Written to the gate's
-#    banner path too, because pam_motd never fires under a ForceCommand and
-#    the gate prints that file itself.
+#    it with the machine's real host, GPU and login. The gate runs the renderer
+#    itself, so there is no second copy to keep in step.
 mkdir -p /etc/blackbox /etc/gpu-gateway
 cat > /etc/blackbox/brand.env <<BRAND
 BLACKBOX_SERVICE='Blackbox GPU Cloud'
@@ -49,8 +48,7 @@ BRAND
 chmod 0644 /etc/blackbox/brand.env
 if [ -x /etc/blackbox/render-motd.sh ]; then
   /etc/blackbox/render-motd.sh > /etc/motd 2>/dev/null || true
-  cp -f /etc/motd /etc/gpu-gateway/banner 2>/dev/null || true
-  chmod 0644 /etc/motd /etc/gpu-gateway/banner 2>/dev/null || true
+  chmod 0644 /etc/motd 2>/dev/null || true
 fi
 
 # 4. host keys, if the image was built without them

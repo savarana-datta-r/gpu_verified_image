@@ -13,7 +13,7 @@
 set -uo pipefail
 
 GATE_URL="${GATE_URL:-https://raw.githubusercontent.com/blackboxai-dev/gpu-verified-image/main/gpu-gate}"
-BANNER_URL="${BANNER_URL:-https://raw.githubusercontent.com/blackboxai-dev/gpu-verified-image/main/motd}"
+RENDER_URL="${RENDER_URL:-https://raw.githubusercontent.com/blackboxai-dev/gpu-verified-image/main/render-motd.sh}"
 VERIFY_URL="${GPU_VERIFY_URL:-}"
 RUN_TOKEN="${GPU_RUN_TOKEN:-}"
 FAILMODE="${GPU_FAILMODE:-open}"
@@ -60,16 +60,34 @@ chmod 0644 /etc/gpu-gateway/verify.env
 # 2b. the welcome banner. On by default, matching the image, so a machine
 #     carrying the gate looks the same however the gate got there.
 #     GPU_BANNER=0 leaves the host's own MOTD untouched.
+#
+#     The RENDERER is installed, not a static file. It reads the machine's own
+#     host and GPU at print time, so an installer-provisioned machine shows the
+#     same banner as one booted from the image rather than a build-time
+#     snapshot. brand.env carries what this invocation knows; everything it
+#     leaves blank the renderer fills in from the machine.
 case "${GPU_BANNER:-1}" in
   1|true|yes)
-    if [ -f ./motd ]; then
-      install -m 0644 ./motd /etc/gpu-gateway/banner
-      echo "install: banner taken from the working directory"
-    elif curl -fsSL --retry 3 "$BANNER_URL" -o /etc/gpu-gateway/banner; then
-      chmod 0644 /etc/gpu-gateway/banner
-      echo "install: banner downloaded"
+    install -d -m 0755 /etc/blackbox
+    if [ -f ./render-motd.sh ]; then
+      install -m 0755 ./render-motd.sh /etc/blackbox/render-motd.sh
+      echo "install: banner renderer taken from the working directory"
+    elif curl -fsSL --retry 3 "$RENDER_URL" -o /etc/blackbox/render-motd.sh; then
+      chmod 0755 /etc/blackbox/render-motd.sh
+      echo "install: banner renderer downloaded"
     else
-      echo "install: could not fetch the banner; continuing without one" >&2
+      echo "install: could not fetch the banner renderer; continuing without one" >&2
+    fi
+    if [ -x /etc/blackbox/render-motd.sh ]; then
+      cat > /etc/blackbox/brand.env <<BRAND
+BLACKBOX_SERVICE='Blackbox GPU Cloud'
+BLACKBOX_HOST='${BLACKBOX_HOST:-}'
+BLACKBOX_GPU='${BLACKBOX_GPU:-}'
+BLACKBOX_LOGIN='${BLACKBOX_LOGIN:-}'
+BLACKBOX_DOCS='https://docs.blackbox.ai'
+BLACKBOX_SUPPORT='support@blackbox.ai'
+BRAND
+      chmod 0644 /etc/blackbox/brand.env
     fi
     ;;
 esac
