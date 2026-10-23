@@ -51,8 +51,15 @@ if [ -x /etc/blackbox/render-motd.sh ]; then
   chmod 0644 /etc/motd 2>/dev/null || true
 fi
 
-# 4. host keys, if the image was built without them
-[ -f /etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -A >/dev/null 2>&1
+# 4. host keys, generated per container.
+#    The image ships none: a baked set means every machine from that image has
+#    the same host identity, and the private half is in the image anyone can
+#    pull. ssh-keygen -A writes only the types that are absent, so this is both
+#    the normal path and a repair for a partial set.
+ssh-keygen -A >/dev/null 2>&1
+if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+  echo "gpu-entrypoint: could not generate SSH host keys; sshd will refuse to start" >&2
+fi
 
 # Validate before committing: a bad drop-in must not stop sshd starting at all.
 if ! /usr/sbin/sshd -t 2>/dev/null; then

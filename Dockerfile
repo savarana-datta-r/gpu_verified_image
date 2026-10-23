@@ -19,10 +19,16 @@
 # docker-content-digest, and update the line below in its own commit.
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04@sha256:517da2300c184c9999ec203c2665244bdebd3578d12fcc7065e83667932643d9
 
+# Host keys are REMOVED, not kept. openssh-server's postinst generates a set at
+# build time, so every container from one image would otherwise answer with the
+# same host identity - and anyone who can pull the image has the private half.
+# A renter's client could not tell that machine from an impostor on the same
+# address. The entrypoint generates a fresh set per container instead.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-server curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /var/run/sshd /etc/gpu-gateway /etc/ssh/sshd_config.d
+ && mkdir -p /var/run/sshd /etc/gpu-gateway /etc/ssh/sshd_config.d \
+ && rm -f /etc/ssh/ssh_host_*
 
 COPY gpu-gate /usr/local/sbin/gpu-gate
 COPY entrypoint.sh /usr/local/sbin/gpu-entrypoint
