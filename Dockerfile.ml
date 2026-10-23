@@ -22,13 +22,19 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_NO_CACHE_DIR=1
 ENV PIP_ROOT_USER_ACTION=ignore
 
+# Host keys are REMOVED, not kept. openssh-server's postinst generates a set at
+# build time, so every container from one image would otherwise answer with the
+# same host identity - and anyone who can pull the image has the private half.
+# A renter's client could not tell that machine from an impostor on the same
+# address. The entrypoint generates a fresh set per container instead.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       openssh-server curl ca-certificates \
       python3 python3-dev python3-pip python3-venv \
       git build-essential pkg-config \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /var/run/sshd /etc/ssh/sshd_config.d
+ && mkdir -p /var/run/sshd /etc/ssh/sshd_config.d \
+ && rm -f /etc/ssh/ssh_host_*
 
 # pip itself first, so the resolver below is the current one.
 RUN python3 -m pip install --upgrade pip setuptools wheel
