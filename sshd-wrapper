@@ -26,4 +26,11 @@ if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
   echo "sshd-wrapper: could not generate SSH host keys" >&2
 fi
 
+# Plain exec. `exec -a sshd` was tried to keep the process named sshd, and
+# sshd refused it: it checks argv[0] is an absolute path before re-execing
+# itself, and dies with "sshd re-exec requires execution with an absolute
+# path". The running process is therefore called sshd.real, so anything that
+# looks for it by exact name must look for the listening port instead - which
+# is the better check anyway, since a named process that is not serving tells
+# you nothing.
 exec /usr/sbin/sshd.real "$@"

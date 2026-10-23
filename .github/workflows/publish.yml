@@ -142,9 +142,13 @@ jobs:
             sleep 1
           done
           [ "$made" -ge 1 ] || { echo "FAIL: sshd started with no host keys"; docker logs "$cid"; exit 1; }
-          docker exec "$cid" sh -c 'pgrep -x sshd >/dev/null' \
-            || { echo "FAIL: sshd is not running"; docker logs "$cid"; exit 1; }
-          echo "ok  sshd generates $made host key(s) when started directly"
+          # Checked by connecting, not by process name. The wrapper execs
+          # sshd.real, so the process is not called "sshd" and a pgrep -x for
+          # it fails while sshd is listening perfectly well.
+          docker exec "$cid" sh -c \
+            'command -v ssh-keyscan >/dev/null && ssh-keyscan -T 5 -p 22 127.0.0.1 2>/dev/null | grep -q ssh-' \
+            || { echo "FAIL: nothing is serving SSH on port 22"; docker logs "$cid"; exit 1; }
+          echo "ok  sshd generates $made host key(s) and serves when started directly"
 
       # Pull what was just published and compare the files inside it with the
       # files in this commit. A build can succeed while shipping something
