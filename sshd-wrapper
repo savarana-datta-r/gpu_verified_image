@@ -1,0 +1,29 @@
+#!/bin/sh
+# Generate the host keys, then hand over to the real sshd.
+#
+# The image ships no host keys: a baked set means every container from it
+# answers with the same host identity, and the private half is in the image
+# anyone can pull.
+#
+# They cannot be generated from the image's ENTRYPOINT, because the platforms
+# this image runs on do not use it. Vast replaces the entrypoint with its own
+# startup script and calls sshd directly; the first build that relied on the
+# entrypoint produced
+#
+#     sshd: no hostkeys available -- exiting.
+#
+# and a container that looked healthy while nothing listened on 22.
+#
+# So the generation lives where sshd itself starts, whoever starts it: this
+# wrapper is installed AS /usr/sbin/sshd and the real binary moves aside.
+# ssh-keygen -A writes only the types that are absent, so a second start costs
+# nothing and a partial set is repaired rather than rejected.
+set -u
+
+ssh-keygen -A >/dev/null 2>&1 || true
+
+if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+  echo "sshd-wrapper: could not generate SSH host keys" >&2
+fi
+
+exec /usr/sbin/sshd.real "$@"
