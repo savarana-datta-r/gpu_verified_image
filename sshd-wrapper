@@ -22,6 +22,13 @@ set -u
 
 ssh-keygen -A >/dev/null 2>&1 || true
 
+# The authenticator gate, for the same reason as the host keys above: these
+# platforms do not run the image's entrypoint, so provisioning that lived only
+# there produced a machine with the gate binary present and no secret, open on
+# the key alone. The provisioner is idempotent, so doing it here costs nothing
+# when the entrypoint already has.
+[ -x /usr/local/sbin/gpu-provision-totp ] && /usr/local/sbin/gpu-provision-totp || true
+
 if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
   echo "sshd-wrapper: could not generate SSH host keys" >&2
 fi

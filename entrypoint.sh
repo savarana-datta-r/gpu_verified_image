@@ -22,67 +22,12 @@ if [ -n "${PUBLIC_KEY:-}" ] || [ -n "${PUBLIC_KEYS:-}" ]; then
   echo "gpu-entrypoint: $(wc -l < /root/.ssh/authorized_keys | tr -d ' ') authorized key(s) installed" >&2
 fi
 
-# 2. the TOTP secret.
+# 2. the authenticator secret, via the shared provisioner.
 #
-# Supplied as GPU_TOTP_SECRET (base32, as every authenticator app expects), the
-# same way PUBLIC_KEY arrives. When it is absent we generate one and print the
-# enrolment URI below, because the alternative — starting a machine that asks
-# for a code nobody can produce — is worse than printing a secret to a log the
-# operator already controls.
-#
-# GPU_TOTP_SECRET takes precedence so a fleet can share one enrolment, and so
-# restarting a container does not invalidate the operator's phone.
-mkdir -p /etc/gpu-gateway
-SECRET="${GPU_TOTP_SECRET:-}"
-GENERATED=no
-if [ -z "$SECRET" ]; then
-  if [ "${GPU_TOTP_ENROLL:-true}" = "true" ]; then
-    # 20 bytes = 160 bits, which is what RFC 4226 recommends for HMAC-SHA1 and
-    # what Google Authenticator's own provisioning uses. Padding is stripped:
-    # apps reject '=' in a secret.
-    SECRET=$(head -c 20 /dev/urandom | base32 2>/dev/null | tr -d '=\n')
-    GENERATED=yes
-  fi
-fi
-
-if [ -n "$SECRET" ]; then
-  printf 'GPU_TOTP_SECRET=%s\nGPU_TOTP_FAILMODE=%s\n' \
-    "$SECRET" "${GPU_TOTP_FAILMODE:-open}" > /etc/gpu-gateway/totp.env
-  chmod 600 /etc/gpu-gateway/totp.env
-  cat > /etc/ssh/sshd_config.d/60-gpu-gate.conf <<'CONF'
-ForceCommand /usr/local/sbin/gpu-gate
-CONF
-  chmod 0644 /etc/ssh/sshd_config.d/60-gpu-gate.conf
-
-  if [ "$GENERATED" = "yes" ]; then
-    LABEL="Blackbox GPU:$(hostname 2>/dev/null || echo gpu)"
-    URI="otpauth://totp/$(printf '%s' "$LABEL" | sed 's/ /%20/g')?secret=$SECRET&issuer=Blackbox&algorithm=SHA1&digits=6&period=30"
-    {
-      echo
-      echo "=============================================================="
-      echo " ENROL YOUR AUTHENTICATOR APP"
-      echo
-      echo " No GPU_TOTP_SECRET was supplied, so one was generated for"
-      echo " this machine. Scan the code below, or enter the key by hand."
-      echo " It is shown ONCE, in this log, and nowhere else."
-      echo
-      echo " key: $SECRET"
-      echo
-      command -v qrencode >/dev/null 2>&1 && qrencode -t ANSIUTF8 -o - "$URI"
-      echo " $URI"
-      echo
-      echo " Pass GPU_TOTP_SECRET at launch to reuse one enrolment across"
-      echo " machines, instead of enrolling each one separately."
-      echo "=============================================================="
-      echo
-    } >&2
-  else
-    echo "gpu-entrypoint: authenticator challenge enabled from the supplied secret" >&2
-  fi
-else
-  echo "gpu-entrypoint: no GPU_TOTP_SECRET and GPU_TOTP_ENROLL=false — SSH is key-only on this machine" >&2
-  rm -f /etc/ssh/sshd_config.d/60-gpu-gate.conf
-fi
+# The same script runs from the sshd wrapper, because Vast and RunPod replace
+# this entrypoint and call sshd directly. It is idempotent, so whichever runs
+# first wins and the other is a no-op.
+/usr/local/sbin/gpu-provision-totp || true
 
 # 3. the login banner, rendered from what this launch knows.
 mkdir -p /etc/blackbox

@@ -1,0 +1,94 @@
+#!/bin/sh
+# Write the authenticator secret and the sshd drop-in that turns the gate on.
+#
+# Called from TWO places, and that is the point:
+#
+#   - the image's entrypoint, where it is the normal path
+#   - the sshd wrapper, because Vast and RunPod REPLACE the entrypoint with
+#     their own startup script and call sshd directly. An earlier build only
+#     did this from the entrypoint, and on those providers the result was a
+#     machine with the gate binary present, no /etc/gpu-gateway/totp.env, no
+#     drop-in, and SSH open on the key alone — a second factor that had
+#     silently not been installed, which is worse than one that visibly fails.
+#
+# Idempotent, because the two callers overlap: a secret already on disk is
+# left alone, so a restart cannot invalidate the operator's phone and the
+# wrapper cannot undo what the entrypoint just did.
+set -u
+
+CONF=/etc/gpu-gateway/totp.env
+DROPIN=/etc/ssh/sshd_config.d/60-gpu-gate.conf
+mkdir -p /etc/gpu-gateway /etc/ssh/sshd_config.d 2>/dev/null || true
+
+# Already provisioned: nothing to do, and nothing to print. The caller may be
+# the wrapper on a container the entrypoint already set up.
+if [ -r "$CONF" ] && grep -q '^GPU_TOTP_SECRET=.' "$CONF" 2>/dev/null; then
+  exit 0
+fi
+
+SECRET="${GPU_TOTP_SECRET:-}"
+GENERATED=no
+if [ -z "$SECRET" ]; then
+  if [ "${GPU_TOTP_ENROLL:-true}" = "true" ]; then
+    # 20 bytes = 160 bits, what RFC 4226 recommends for HMAC-SHA1 and what
+    # Google Authenticator's own provisioning uses. Padding is stripped: apps
+    # reject '=' in a secret.
+    SECRET=$(head -c 20 /dev/urandom | base32 2>/dev/null | tr -d '=\n')
+    GENERATED=yes
+  fi
+fi
+
+if [ -z "$SECRET" ]; then
+  echo "gpu-provision-totp: no GPU_TOTP_SECRET and GPU_TOTP_ENROLL=false — SSH is key-only" >&2
+  rm -f "$DROPIN"
+  exit 0
+fi
+
+printf 'GPU_TOTP_SECRET=%s\nGPU_TOTP_FAILMODE=%s\n' \
+  "$SECRET" "${GPU_TOTP_FAILMODE:-open}" > "$CONF"
+chmod 600 "$CONF"
+printf 'ForceCommand /usr/local/sbin/gpu-gate\n' > "$DROPIN"
+chmod 0644 "$DROPIN"
+
+# Validate against the REAL binary: /usr/sbin/sshd is the wrapper, and one of
+# this script's callers is that wrapper. A bad drop-in degrades to a key-only
+# machine rather than one nobody can log into.
+#
+# Host keys first, because `sshd -t` fails without them and that failure says
+# nothing about the drop-in. Called from the entrypoint this script runs before
+# the keys exist, and the validation below then deleted the very drop-in it had
+# just written — the gate silently off on exactly the providers that DO run the
+# entrypoint. ssh-keygen -A writes only what is missing, so this is free when
+# the wrapper has already done it.
+ssh-keygen -A >/dev/null 2>&1 || true
+if [ -x /usr/sbin/sshd.real ] && ! /usr/sbin/sshd.real -t 2>/dev/null; then
+  echo "gpu-provision-totp: sshd rejected the gate config; removing it" >&2
+  rm -f "$DROPIN"
+  exit 0
+fi
+
+if [ "$GENERATED" = "yes" ]; then
+  LABEL="Blackbox GPU:$(hostname 2>/dev/null || echo gpu)"
+  URI="otpauth://totp/$(printf '%s' "$LABEL" | sed 's/ /%20/g')?secret=$SECRET&issuer=Blackbox&algorithm=SHA1&digits=6&period=30"
+  {
+    echo
+    echo "=============================================================="
+    echo " ENROL YOUR AUTHENTICATOR APP"
+    echo
+    echo " No GPU_TOTP_SECRET was supplied, so one was generated for"
+    echo " this machine. Scan the code below, or enter the key by hand."
+    echo " It is shown ONCE, in this log, and nowhere else."
+    echo
+    echo " key: $SECRET"
+    echo
+    command -v qrencode >/dev/null 2>&1 && qrencode -t ANSIUTF8 -o - "$URI"
+    echo " $URI"
+    echo
+    echo " Pass GPU_TOTP_SECRET at launch to reuse one enrolment across"
+    echo " machines, instead of enrolling each one separately."
+    echo "=============================================================="
+    echo
+  } >&2
+else
+  echo "gpu-provision-totp: authenticator challenge enabled from the supplied secret" >&2
+fi

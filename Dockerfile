@@ -55,8 +55,9 @@ RUN mv /usr/sbin/sshd /usr/sbin/sshd.real \
  && chmod 0755 /usr/sbin/sshd /usr/sbin/sshd.real
 
 COPY gpu-gate /usr/local/sbin/gpu-gate
+COPY gpu-provision-totp /usr/local/sbin/gpu-provision-totp
 COPY entrypoint.sh /usr/local/sbin/gpu-entrypoint
-RUN chmod 0755 /usr/local/sbin/gpu-gate /usr/local/sbin/gpu-entrypoint
+RUN chmod 0755 /usr/local/sbin/gpu-gate /usr/local/sbin/gpu-provision-totp /usr/local/sbin/gpu-entrypoint
 
 # Branding.
 #

@@ -76,8 +76,9 @@ RUN printf '%s\n' \
  && chmod 0644 /etc/profile.d/10-cuda.sh
 
 COPY gpu-gate /usr/local/sbin/gpu-gate
+COPY gpu-provision-totp /usr/local/sbin/gpu-provision-totp
 COPY entrypoint.sh /usr/local/sbin/gpu-entrypoint
-RUN chmod 0755 /usr/local/sbin/gpu-gate /usr/local/sbin/gpu-entrypoint
+RUN chmod 0755 /usr/local/sbin/gpu-gate /usr/local/sbin/gpu-provision-totp /usr/local/sbin/gpu-entrypoint
 
 # The banner renderer. The static motd below is the build-time fallback; the
 # entrypoint overwrites /etc/motd with the rendered one, which carries the

@@ -43,14 +43,28 @@ Pass it as `GPU_TOTP_SECRET`. Every machine launched with the same secret
 accepts the same codes, which is what you want for a fleet — and restarting a
 container does not invalidate your phone.
 
-**Or let the machine generate one.** With no `GPU_TOTP_SECRET`, the entrypoint
-creates a secret and prints its enrolment URI and a QR code to the container
-log, once. Scan it from the provider's log view. Nothing to provision in
-advance, but the secret is only as private as that log, and a restart issues a
-new one.
+**Or let the machine generate one.** With no `GPU_TOTP_SECRET` the machine
+creates a secret on first start and prints its enrolment URI and a QR code to
+the container log, once. Scan it from the provider's log view. Nothing to
+provision in advance, but the secret is only as private as that log, and a
+restart issues a new one.
+
+This happens wherever `sshd` starts, not only from the image's entrypoint.
+RunPod and Vast replace the entrypoint with their own startup script, and an
+earlier build that provisioned only from the entrypoint left the gate silently
+off on exactly those providers — the binary present, no secret, SSH open on the
+key alone. The provisioning now runs from the `sshd` wrapper as well and is
+idempotent, so it configures itself on every host either way.
 
 To refuse both, set `GPU_TOTP_ENROLL=false`: SSH stays key-only and the gate is
 removed. Useful for a machine you want on the same image without the challenge.
+
+Whichever route you take, check it took effect — a machine that should be
+gated and is not looks exactly like a working one:
+
+```bash
+ssh -p 2222 root@<host> 'ls -l /etc/gpu-gateway/totp.env; cat /etc/ssh/sshd_config.d/60-gpu-gate.conf'
+```
 
 ## Running it
 
@@ -65,8 +79,12 @@ ssh -p 2222 root@<host>
 
 On a GPU provider, give the image reference and set `PUBLIC_KEY` and
 `GPU_TOTP_SECRET` in the launch environment. Both RunPod and Vast read
-`PUBLIC_KEY` by convention; the entrypoint also accepts `PUBLIC_KEYS` and takes
-several keys, one per line, so a person and a CI runner can share one machine.
+`PUBLIC_KEY` themselves and install it before `sshd` starts, which is why the
+gate works there even though they never run this image's entrypoint.
+
+Where the entrypoint DOES run it installs the keys itself, and accepts
+`PUBLIC_KEYS` as well — several keys, one per line, deduplicated — so a person
+and a CI runner can share one machine.
 
 ## Configuration
 
@@ -119,9 +137,15 @@ Keeping those two cases apart is the point. Collapse them into one and the
 default setting waves through every wrong code — a gate that looks like it is
 working while verifying nothing.
 
-A broken gate configuration is also never fatal: the entrypoint runs `sshd -t`
+A broken gate configuration is also never fatal: the provisioner runs `sshd -t`
 against what it wrote and removes the gate if `sshd` objects. The machine
 degrades to key-only. It never becomes a machine nobody can log into.
+
+It generates the host keys before that check, because `sshd -t` fails without
+them and that failure says nothing about the drop-in. Without it the check
+deleted the drop-in it had just written, turning the gate off on the providers
+that DO run the entrypoint — the mirror image of the bug above, and found the
+same way, by starting the image both ways and looking.
 
 ## Checking it works
 

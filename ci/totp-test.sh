@@ -144,6 +144,51 @@ check "no tty + command passes through" "$out" "transferred" "Enter the 6-digit 
 out=$(run "$WORK/notty" </dev/null)
 check "no tty + no command -> sftp" "$out" "" "Enter the 6-digit code"
 
+
+# ── the provisioner, which decides whether the gate exists at all ───────────
+#
+# These run it directly rather than through a container, so they hold for every
+# host. The container-level proof that it works with the entrypoint REPLACED is
+# in the image build; what is checked here is the logic that made it possible.
+echo
+echo "== provisioner =="
+
+prov_env() {   # run the provisioner against a sandbox, $@ = env assignments
+  rm -rf "$WORK/p"; mkdir -p "$WORK/p/etc/gpu-gateway" "$WORK/p/etc/ssh/sshd_config.d"
+  sed -e "s|CONF=/etc/gpu-gateway/totp.env|CONF=$WORK/p/etc/gpu-gateway/totp.env|" \
+      -e "s|DROPIN=/etc/ssh/sshd_config.d/60-gpu-gate.conf|DROPIN=$WORK/p/etc/ssh/sshd_config.d/60-gpu-gate.conf|" \
+      -e "s|mkdir -p /etc/gpu-gateway /etc/ssh/sshd_config.d|mkdir -p $WORK/p/etc/gpu-gateway $WORK/p/etc/ssh/sshd_config.d|" \
+      gpu-provision-totp > "$WORK/prov"
+  env -i PATH="$PATH" "$@" sh "$WORK/prov" 2>&1 || true
+}
+
+out=$(prov_env GPU_TOTP_SECRET=JBSWY3DPEHPK3PXP)
+check "a supplied secret is written" "$(cat "$WORK/p/etc/gpu-gateway/totp.env" 2>/dev/null)" "GPU_TOTP_SECRET=JBSWY3DPEHPK3PXP"
+check "a supplied secret turns the gate on" "$(cat "$WORK/p/etc/ssh/sshd_config.d/60-gpu-gate.conf" 2>/dev/null)" "ForceCommand"
+check "a supplied secret prints no enrolment" "$out" "" "ENROL YOUR AUTHENTICATOR"
+
+out=$(prov_env)
+check "no secret generates one"        "$(cat "$WORK/p/etc/gpu-gateway/totp.env" 2>/dev/null)" "GPU_TOTP_SECRET="
+check "a generated secret is enrollable" "$out" "otpauth://totp/"
+check "a generated secret turns the gate on" "$(cat "$WORK/p/etc/ssh/sshd_config.d/60-gpu-gate.conf" 2>/dev/null)" "ForceCommand"
+
+out=$(prov_env GPU_TOTP_ENROLL=false)
+check "enrol=false leaves no gate" "$([ -f "$WORK/p/etc/ssh/sshd_config.d/60-gpu-gate.conf" ] && echo gated || echo keyonly)" "keyonly"
+
+# Idempotence is what lets the entrypoint and the sshd wrapper both call it.
+prov_env GPU_TOTP_SECRET=FIRSTSECRETAAAAAAAAAAAAAAAAAAAAA >/dev/null
+first=$(cat "$WORK/p/etc/gpu-gateway/totp.env")
+env -i PATH="$PATH" GPU_TOTP_SECRET=SECONDSECRETBBBBBBBBBBBBBBBBBBBB sh "$WORK/prov" >/dev/null 2>&1 || true
+check "a second run leaves the first secret alone" "$(cat "$WORK/p/etc/gpu-gateway/totp.env")" "$first"
+
+# The host-key ordering bug: the validation must not delete its own drop-in.
+check "the provisioner generates host keys before validating" \
+  "$(cat gpu-provision-totp)" "ssh-keygen -A"
+
+# Both callers must invoke it, or one class of host silently loses the gate.
+check "the sshd wrapper provisions too" "$(cat sshd-wrapper)" "gpu-provision-totp"
+check "the entrypoint provisions too"   "$(cat entrypoint.sh)" "gpu-provision-totp"
+
 echo
 echo "passed $PASS, failed $FAILED"
 [ "$FAILED" -eq 0 ] || exit 1
