@@ -1,19 +1,19 @@
 #!/bin/sh
-# gpu-gate — reports each interactive SSH login to the gateway, run as sshd
-# ForceCommand.
+# gpu-gate — asks for a code from an authenticator app before handing over a
+# shell, run as sshd ForceCommand.
 #
-# THERE IS NO CODE TO ENTER. This deployment does not challenge logins: the key
-# sshd already authenticated with is the factor, and the gateway's part is to
-# record who that key belongs to. The gate tells the gateway a login opened and
-# hands the session straight on.
+# THIS VARIANT TALKS TO NOTHING. The code is checked on this machine against a
+# TOTP secret supplied at launch, so the image works on any GPU, at any
+# provider, with no gateway, no network and no email. The trade is deliberate:
+# there is no central record of who logged in, because there is nobody to tell.
+# If you want the record, use the gateway-backed variant instead.
 #
-# The prompt loop below is kept for one case only: a gateway still running the
-# version that issues codes. It answers the first call with 202, and then the
-# loop asks. A gateway that answers the allow is never prompted.
+# WHAT IT PROTECTS. An SSH key on its own stops being enough: whoever holds the
+# key must also hold the authenticator device. That is the entire claim.
 #
-# sshd runs this INSTEAD of the requested command, after authentication, on the
-# session's own terminal — which is why it CAN prompt when it has to (pam_exec
-# cannot). It then hands control to what the client actually wanted.
+# NOT a security boundary: the tenant has root. They can read the secret out of
+# /etc/gpu-gateway/totp.env and delete this line from sshd_config. It raises the
+# cost of a stolen key; it does not confine the person renting the machine.
 #
 # WHAT GETS CHALLENGED. Anything with a terminal, since a terminal is what can
 # answer a prompt. Everything without one passes through untouched —
@@ -23,38 +23,25 @@
 #   a tty (command or not)              -> CHALLENGE, then run what was asked for
 #
 # The tty is tested before the command. The other way round, `ssh -tt host
-# bash -i` passed through: an interactive shell, unchallenged and unrecorded.
-#
-# NOT a security boundary: the tenant has sudo and can remove this line from
-# sshd_config. It records who logs in; it does not confine them.
+# bash -i` passed through: an interactive shell, unchallenged.
 
 set -u
-CONF=/etc/gpu-gateway/verify.env
+CONF=/etc/gpu-gateway/totp.env
+STATE=/run/gpu-gate-last
 
-# What this gate speaks, sent on every call and carried in the User-Agent.
-#
-# 1  the original: the verifier issues a code and the gate prompts for it
-# 2  this one: the verifier records the login and answers the allow
-#
-# It exists because the two were deployed out of step once. A gate built for
-# 1 met a verifier speaking 2, did not recognise the answer, and fell to its
-# fail policy - allowed under `open`, denied under `closed`. A verifier that
-# reads this can answer in the shape the caller understands instead of
-# assuming both sides were updated together.
-GATE_VERSION=2
-# Log to syslog, not a file: the gate runs as the unprivileged login user
-# under ForceCommand and cannot write a root-owned log — and a failed
-# redirection would leak onto the user's own terminal.
+# Accept a code from the window before and after the current one, so a client
+# clock a few seconds out still works. Each step is 30s, so this tolerates
+# roughly +/-30s of skew. Widening it widens the window an intercepted code
+# stays usable in.
+WINDOW=${GPU_TOTP_WINDOW:-1}
+
+# Log to syslog, not a file: the gate runs as the unprivileged login user under
+# ForceCommand and cannot write a root-owned log — and a failed redirection
+# would leak onto the user's own terminal. The secret is never logged.
 log() { logger -t gpu-gate -- "$*" 2>/dev/null || true; }
 
 login_shell() {
   # pam_motd never runs under a ForceCommand, so the banner is printed here.
-  # Shell sessions only: a command or an sftp transfer never reaches this.
-  #
-  # The renderer is the only source. The static /etc/gpu-gateway/banner it used
-  # to fall back to was for machines built before branding shipped; every image
-  # and every installer has carried render-motd.sh since, so the fallback could
-  # only ever print a stale banner on a machine that already had a current one.
   [ -x /etc/blackbox/render-motd.sh ] && /etc/blackbox/render-motd.sh >&2 2>/dev/null
   SH=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)
   [ -n "$SH" ] || SH=/bin/bash
@@ -66,22 +53,21 @@ sftp_server() {
   done
   exec internal-sftp 2>/dev/null || { echo "sftp unavailable" >&2; exit 1; }
 }
-# Run what the client asked for. Used by every allowed outcome, so a requested
-# command is honoured rather than replaced by a shell.
+# Run what the client asked for, so a requested command is honoured rather than
+# replaced by a shell.
 proceed() {
   if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
     exec ${SHELL:-/bin/sh} -c "$SSH_ORIGINAL_COMMAND"
   fi
   login_shell
 }
-# For when the login CANNOT BE CHECKED: the gateway is unreachable, or the
-# config is too incomplete to reach it. Never for a gateway that answered "no" —
-# a blip must not lock a customer out, a wrong code must not let anyone in.
-# Defined here, not below, because the config read calls it.
+# For when the login CANNOT BE CHECKED: no secret, or no tool to check it with.
+# Never for a code that was checked and rejected — a missing secret must not
+# lock a customer out, a wrong code must not let anyone in.
 failmode_exit() {
   if [ "${FAILMODE:-open}" = "closed" ]; then
     log "cannot verify, failmode=closed -> DENY"
-    echo "Login verification is unavailable and this machine is set to fail closed." >&2
+    echo "Two-factor verification is unavailable and this machine is set to fail closed." >&2
     exit 1
   fi
   log "cannot verify, failmode=open -> allow (unverified)"
@@ -90,109 +76,73 @@ failmode_exit() {
 
 # ── pass-through cases: no terminal, so nothing could answer a prompt ───────
 if ! tty -s; then
-  # A requested command (remote exec, old-style scp, rsync): run it verbatim.
   if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
     log "passthrough cmd (user=$(id -un) host=${SSH_CLIENT%% *})"
     proceed
   fi
-  # No command either: sftp subsystem, or `ssh -T`. Hand to sftp-server.
   log "passthrough no-tty (sftp/ -T) (user=$(id -un))"
   sftp_server
 fi
 
 # ── a terminal is attached: this is what we gate ────────────────────────────
-# Printed before any config read, fingerprint work or network call, so it shows the moment the shell is requested.
-printf '\nRecording this login...\n' >&2
-
-# No config file: the fail policy lives in it, so there is none to honour. Allow.
-[ -r "$CONF" ] || { log "no config at $CONF -> allow unverified"; proceed; }
-. "$CONF"
-URL="${GPU_VERIFY_URL:-}"; TOKEN="${GPU_RUN_TOKEN:-}"; FAILMODE="${GPU_FAILMODE:-open}"
-# Read but unusable (blank URL or token). Here the policy IS known, so it
-# decides: this is the same "cannot verify" as an unreachable gateway, and
-# allowing it made fail-closed behave as fail-open.
-[ -n "$URL" ] && [ -n "$TOKEN" ] || { log "config incomplete -> failmode"; failmode_exit; }
-
-# The key sshd authenticated with. `ExposeAuthInfo yes` writes the auth lines
-# to a file and points SSH_USER_AUTH at it; the publickey line is
-# "publickey <algo> <base64>", from which ssh-keygen gives the SHA256 print.
-FP=""
-if [ -n "${SSH_USER_AUTH:-}" ] && [ -r "${SSH_USER_AUTH:-/nonexistent}" ]; then
-  KEY=$(awk '/^publickey /{print $2" "$3; exit}' "$SSH_USER_AUTH")
-  [ -n "$KEY" ] && FP=$(printf '%s\n' "$KEY" | ssh-keygen -lf - 2>/dev/null | awk '{print $2}')
-fi
 RHOST="${SSH_CLIENT%% *}"; LUSER="$(id -un)"
 
-esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# No config: there is no secret and no policy to honour. Allow, and say so in
+# the log rather than silently behaving like an ungated machine.
+[ -r "$CONF" ] || { log "no config at $CONF -> allow unverified"; proceed; }
+. "$CONF"
+SECRET="${GPU_TOTP_SECRET:-}"; FAILMODE="${GPU_TOTP_FAILMODE:-open}"
 
-# POST and split the HTTP status from the body. curl's own failure (no
-# connection, timeout, DNS) leaves STATUS empty; a reached gateway sets it to
-# its code, however bad. The two are handled very differently below.
-BODY=""; STATUS=""
-call() {
-  # 20s was long enough to be felt on every login when the verifier was slow,
-  # and it is spent before the fail policy is even consulted. 8s is past the
-  # tail of a healthy round trip and short enough not to read as a hang.
-  BODY=$(curl -s -m 8 -w '\n%{http_code}' -X POST "$URL" \
-    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    -H "User-Agent: gpu-gate/$GATE_VERSION" \
-    -d "$1" 2>/dev/null)
-  STATUS=$(printf '%s' "$BODY" | tail -n1)
-  BODY=$(printf '%s' "$BODY" | sed '$d')
-  case "$STATUS" in 2*|4*|5*) : ;; *) STATUS="" ;; esac
-}
+# Read but unusable. Here the policy IS known, so it decides: this is the same
+# "cannot verify" as a missing tool, and allowing it outright would make
+# fail-closed behave as fail-open.
+[ -n "$SECRET" ] || { log "no secret configured -> failmode"; failmode_exit; }
+command -v oathtool >/dev/null 2>&1 || { log "oathtool missing -> failmode"; failmode_exit; }
 
-# ── tell the gateway a login opened ─────────────────────────────────────────
-call "{\"step\":\"request\",\"gateVersion\":$GATE_VERSION,\"fingerprint\":\"$(esc "$FP")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
-if [ -z "$STATUS" ] || [ "${STATUS%%??}" = "5" ]; then
-  failmode_exit            # genuinely unreachable
-fi
-# The gateway recorded it and allowed it: no code, no prompt. Checked before
-# the status cases below, because this is the only answer a current gateway
-# gives. Whitespace-insensitive, like the verify check further down: a
-# pretty-printing gateway answers `"verified": true`.
-case "$(printf '%s' "$BODY" | tr -d ' \t\n')" in
-  *'"verified":true'*)
-    log "recorded (user=$LUSER host=$RHOST fp=$FP)"
-    printf 'Logged in.\n' >&2
-    proceed
-    ;;
-esac
-if [ "$STATUS" = "429" ]; then
-  # A code was sent moments ago and is still valid (the resend cooldown). Do
-  # NOT fail open on this — the code exists, so prompt for it.
-  printf '\nA login code was already emailed to the owner of this key; enter it.\n' >&2
-  log "code reused within cooldown (user=$LUSER host=$RHOST)"
-elif [ "$STATUS" = "202" ]; then
-  printf 'A 6-digit code has been emailed to this key'"'"'s owner. It can take a few seconds to arrive.\n' >&2
-  log "code requested (user=$LUSER host=$RHOST fp=$FP)"
-else
-  # Any other answer (e.g. 409: this key is registered to nobody we can email)
-  # means the login cannot be verified. The fail policy decides, as for unreachable.
-  log "request refused (status=$STATUS) -> failmode"
-  failmode_exit
-fi
+printf '\nThis machine requires a code from your authenticator app.\n' >&2
 
-# ── prompt and verify ───────────────────────────────────────────────────────
+# ── prompt and verify, entirely on this machine ─────────────────────────────
 i=1
 while [ "$i" -le 3 ]; do
   printf 'Enter the 6-digit code: ' >&2
   IFS= read -r CODE || break
   CODE=$(printf '%s' "$CODE" | tr -cd '0-9')
-  call "{\"step\":\"verify\",\"gateVersion\":$GATE_VERSION,\"fingerprint\":\"$(esc "$FP")\",\"code\":\"$(esc "$CODE")\",\"osUser\":\"$(esc "$LUSER")\",\"sourceIp\":\"$(esc "$RHOST")\"}"
-  if [ -z "$STATUS" ] || [ "${STATUS%%??}" = "5" ]; then
-    failmode_exit          # unreachable mid-verify: policy decides, NOT a deny
+  if [ -z "$CODE" ]; then
+    printf 'No code entered.\n' >&2
+    i=$((i + 1)); continue
   fi
-  # Whitespace-insensitive. A verifier that pretty-prints its JSON answers
-  # `"verified": true`, and matching only the compact spelling would reject a
-  # correct code while the verifier's own log says it accepted one.
-  case "$(printf '%s' "$BODY" | tr -d ' \t\n')" in
-    *'"verified":true'*) log "verified (user=$LUSER host=$RHOST)"; printf 'Verified.\n' >&2; proceed ;;
-  esac
-  # A reached gateway that said no (wrong/expired code, 4xx) is a real denial.
+
+  # Replay guard. A code stays valid for its whole step, and with WINDOW set it
+  # is accepted either side of that, so the same six digits could otherwise be
+  # presented twice inside roughly a minute and a half. Refusing a code we have
+  # already honoured closes that without needing any state beyond the last one.
+  NOW=$(date +%s 2>/dev/null || echo 0)
+  SEEN=""
+  if [ -r "$STATE" ]; then
+    SEEN=$(cut -d' ' -f1 "$STATE" 2>/dev/null)
+    SEEN_AT=$(cut -d' ' -f2 "$STATE" 2>/dev/null)
+    [ -n "${SEEN_AT:-}" ] && [ "$((NOW - SEEN_AT))" -gt 90 ] && SEEN=""
+  fi
+  if [ -n "$SEEN" ] && [ "$SEEN" = "$CODE" ]; then
+    log "replayed code refused (user=$LUSER host=$RHOST)"
+    printf 'That code has already been used. Wait for the next one.\n' >&2
+    i=$((i + 1)); continue
+  fi
+
+  # oathtool validates the code itself when given one, searching WINDOW steps,
+  # and exits non-zero if it does not match. Output is discarded: on success it
+  # prints the matching position, which is of no use to the person logging in,
+  # and on failure it can echo the secret's length.
+  if oathtool --totp -b --window="$WINDOW" "$SECRET" "$CODE" >/dev/null 2>&1; then
+    printf '%s %s\n' "$CODE" "$NOW" > "$STATE" 2>/dev/null || true
+    chmod 600 "$STATE" 2>/dev/null || true
+    log "verified (user=$LUSER host=$RHOST)"
+    printf 'Verified.\n' >&2
+    proceed
+  fi
   printf 'Incorrect or expired code.\n' >&2
   i=$((i + 1))
 done
 log "denied after 3 attempts (user=$LUSER host=$RHOST)"
-echo "Login verification failed." >&2
+echo "Two-factor verification failed." >&2
 exit 1
