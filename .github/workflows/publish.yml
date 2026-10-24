@@ -43,9 +43,13 @@ jobs:
               echo "suffix=-totp" >> "$GITHUB_OUTPUT"
               echo "alias=" >> "$GITHUB_OUTPUT"
               ;;
-            *)
+            main)
               echo "suffix=" >> "$GITHUB_OUTPUT"
               echo "alias=" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::no tag suffix defined for ${GITHUB_REF_NAME}; refusing to publish over another branch's tags"
+              exit 1
               ;;
           esac
 
@@ -211,14 +215,29 @@ jobs:
       - name: Tag suffix
         id: tag
         run: |
+          # Every branch that publishes MUST appear here. This block is
+          # duplicated in the build job above, and a branch added to one and
+          # not the other falls through to the empty suffix — which is not a
+          # missing tag but the WRONG one: image_totp once published its gated
+          # ML image over cuda12.4-ml and ml, the plain tags that belong to
+          # main, so a pull of the un-gated image asked for an authenticator
+          # code.
           case "${GITHUB_REF_NAME}" in
             image_otp|image_gate)
               echo "suffix=-otp" >> "$GITHUB_OUTPUT"
               echo "alias=-gate" >> "$GITHUB_OUTPUT"
               ;;
-            *)
+            image_totp)
+              echo "suffix=-totp" >> "$GITHUB_OUTPUT"
+              echo "alias=" >> "$GITHUB_OUTPUT"
+              ;;
+            main)
               echo "suffix=" >> "$GITHUB_OUTPUT"
               echo "alias=" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::no tag suffix defined for ${GITHUB_REF_NAME}; refusing to publish over another branch's tags"
+              exit 1
               ;;
           esac
 
