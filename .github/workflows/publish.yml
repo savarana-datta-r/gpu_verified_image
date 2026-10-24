@@ -172,8 +172,20 @@ jobs:
           # it fails while sshd is listening perfectly well - which is exactly
           # what this check got wrong the first time. A name proves nothing; a
           # protocol banner proves it is serving.
-          docker exec "$cid" sh -c \
-            'command -v ssh-keyscan >/dev/null && ssh-keyscan -T 5 -p 22 127.0.0.1 2>/dev/null | grep -q ssh-' \
+          # Retried, not single-shot. Host keys appear before sshd is listening —
+          # the wrapper generates them, then provisions the gate, and only then
+          # execs sshd — so a keyscan fired the moment the keys exist races the
+          # daemon it is checking for. It did, and failed one repo's build while
+          # the other passed on identical code.
+          served=no
+          for _ in $(seq 1 20); do
+            if docker exec "$cid" sh -c \
+                 'command -v ssh-keyscan >/dev/null && ssh-keyscan -T 5 -p 22 127.0.0.1 2>/dev/null | grep -q ssh-'; then
+              served=yes; break
+            fi
+            sleep 1
+          done
+          [ "$served" = yes ] \
             || { echo "FAIL: nothing is serving SSH on port 22"; docker logs "$cid"; exit 1; }
           echo "ok  sshd generates $made host key(s) and serves when started directly"
 
