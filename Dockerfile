@@ -1,18 +1,24 @@
-# Recorded-login GPU workload image.
+# Two-factor GPU workload image.
 #
-# A CUDA runtime with sshd and a login gate that reports every interactive SSH
-# session to the gateway as it opens. No code is asked for. Built for hosts
-# where the machine is a container and there is no post-boot hook to install
-# the gate with: it is baked in here and wired up by the entrypoint from
-# environment supplied at launch.
+# A CUDA runtime with sshd and a login gate that asks for a code from an
+# authenticator app before handing over a shell. The code is checked ON THIS
+# MACHINE against a TOTP secret supplied at launch, so the image needs no
+# gateway, no network and no email: it runs unchanged on any provider, and on
+# hardware that is nobody's cloud.
 #
-#   docker build -t ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4 .
+# The trade is deliberate. Nothing reports the login anywhere, because there is
+# nobody to report it to. This is authentication, not audit. For a central
+# record of who logged in, use the gateway-backed image instead.
+#
+#   docker build -t ghcr.io/blackboxai-dev/gpu-verified-image:cuda12.4-totp .
 #
 # The entrypoint reads, from the container environment:
-#   PUBLIC_KEY       the renter's SSH public key
-#   GPU_VERIFY_URL   the verification endpoint
-#   GPU_RUN_TOKEN    the per-run bearer token
-#   GPU_FAILMODE     open | closed
+#   PUBLIC_KEY         the renter's SSH public key
+#   GPU_TOTP_SECRET    base32 secret shared with the authenticator app.
+#                      Absent, one is generated and its enrolment URI printed
+#                      to the container log, once.
+#   GPU_TOTP_ENROLL    false to refuse to generate one; SSH stays key-only
+#   GPU_TOTP_FAILMODE  open | closed, for when no secret is configured
 # The base is pinned by digest, not by tag. `12.4.1-runtime-ubuntu22.04` is
 # republished upstream, so building the same commit twice against the tag can
 # produce two different images. Repin deliberately: resolve the tag, read
@@ -29,8 +35,12 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04@sha256:517da2300c184c9999ec203c26652
 # entrypoint: Vast and RunPod replace the entrypoint with their own startup
 # script and call sshd directly, so an entrypoint-based generator never runs
 # there and sshd exits with "no hostkeys available".
+# oathtool is what checks the code; qrencode only renders the enrolment QR and
+# is small enough to be worth the convenience of scanning rather than typing a
+# 32-character secret by hand.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server curl ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      openssh-server curl ca-certificates oathtool qrencode \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /var/run/sshd /etc/gpu-gateway /etc/ssh/sshd_config.d \
  && rm -f /etc/ssh/ssh_host_*
@@ -92,10 +102,10 @@ ENTRYPOINT ["/usr/local/sbin/gpu-entrypoint"]
 # first two empty rather than stamping a provenance it cannot vouch for.
 ARG REVISION=""
 ARG CREATED=""
-ARG VERSION="cuda12.4"
+ARG VERSION="cuda12.4-totp"
 ARG DOCS_REF="main"
-LABEL org.opencontainers.image.title="Verified-login GPU image" \
-      org.opencontainers.image.description="CUDA 12.4 runtime with sshd and an SSH login gate that records each interactive login, for GPU hosts that cannot run a post-boot hook." \
+LABEL org.opencontainers.image.title="Two-factor GPU image" \
+      org.opencontainers.image.description="CUDA 12.4 runtime with sshd and an SSH login gate that requires a code from an authenticator app, verified on the machine with no gateway or network." \
       org.opencontainers.image.source="https://github.com/blackboxai-dev/gpu-verified-image" \
       org.opencontainers.image.documentation="https://github.com/blackboxai-dev/gpu-verified-image/blob/$DOCS_REF/README.md" \
       org.opencontainers.image.vendor="Blackbox AI" \

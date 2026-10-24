@@ -3,8 +3,8 @@ name: publish
 
 on:
   push:
-    branches: [main, image_otp]
-    paths: ["Dockerfile", "Dockerfile.ml", "entrypoint.sh", "gpu-gate", "motd", "issue", ".github/workflows/publish.yml"]
+    branches: [main, image_otp, image_totp]
+    paths: ["Dockerfile", "Dockerfile.ml", "entrypoint.sh", "gpu-gate", "motd", "issue", "ci/**", ".github/workflows/publish.yml"]
   workflow_dispatch: {}
 
 permissions:
@@ -21,9 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Tag suffix per branch, so the two images never overwrite each other.
+      # Tag suffix per branch, so the images never overwrite each other.
       #   main                   -> the plain image: cuda12.4, latest, …
       #   image_otp / image_gate -> the gated image: the same names, suffixed
+      #   image_totp             -> the two-factor image, checked on the machine
       #
       # The gated branch publishes under BOTH -otp and -gate. -otp is the
       # historical name, kept so nothing pointing at it breaks; -gate is what
@@ -37,6 +38,10 @@ jobs:
             image_otp|image_gate)
               echo "suffix=-otp" >> "$GITHUB_OUTPUT"
               echo "alias=-gate" >> "$GITHUB_OUTPUT"
+              ;;
+            image_totp)
+              echo "suffix=-totp" >> "$GITHUB_OUTPUT"
+              echo "alias=" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "suffix=" >> "$GITHUB_OUTPUT"
@@ -53,13 +58,20 @@ jobs:
           [ -f uninstall.sh ] && bash -n uninstall.sh
           true
 
-      # The gate, run for real against demo-verifier.py. Parsing it only proved
-      # it was valid shell; a gate that parses and then denies every login, or
-      # prompts for a code nobody issues, reached a published image once.
-      # Both fail policies are exercised, because the difference between them
-      # is exactly what went wrong.
+      # The gate, run for real. Parsing it only proved it was valid shell; a
+      # gate that parses and then refuses every correct code, or accepts any six
+      # digits, is still a broken gate — and a gate that parsed reached a
+      # published image once. Both fail policies are exercised, because the
+      # difference between them is exactly what went wrong before.
+      - name: Gate accepts a correct code and nothing else
+        if: hashFiles('ci/totp-test.sh') != ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends oathtool
+          ./ci/totp-test.sh
+
       - name: Gate opens a session against the verifier
-        if: hashFiles('gpu-gate') != ''
+        if: hashFiles('ci/gate-test.sh') != ''
         run: ./ci/gate-test.sh
 
       - name: Build timestamp

@@ -1,8 +1,11 @@
-# Recorded-login GPU image, ML variant.
+# Two-factor GPU image, ML variant.
 #
-# The slim image (Dockerfile) carries the login gate and nothing else. This one
-# adds the toolchain a Lambda Stack machine ships, so a renter who lands on it
-# finds the tools they expect rather than a bare CUDA runtime.
+# The slim image (Dockerfile) carries the authenticator gate and nothing else.
+# This one adds the toolchain a Lambda Stack machine ships, so a renter who
+# lands on it finds the tools they expect rather than a bare CUDA runtime.
+#
+# As with the slim image, the code is checked on this machine and nothing is
+# reported anywhere: no gateway, no network, no email.
 #
 # Differences from the slim image, all deliberate:
 #   - a cudnn-devel base, so nvcc and the CUDA headers are present
@@ -33,7 +36,7 @@ ENV PIP_ROOT_USER_ACTION=ignore
 # there and sshd exits with "no hostkeys available".
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      openssh-server curl ca-certificates \
+      openssh-server curl ca-certificates oathtool qrencode \
       python3 python3-dev python3-pip python3-venv \
       git build-essential pkg-config \
  && rm -rf /var/lib/apt/lists/* \
@@ -106,10 +109,10 @@ ENTRYPOINT ["/usr/local/sbin/gpu-entrypoint"]
 
 ARG REVISION=""
 ARG CREATED=""
-ARG VERSION="cuda12.4-ml"
+ARG VERSION="cuda12.4-ml-totp"
 ARG DOCS_REF="main"
-LABEL org.opencontainers.image.title="Verified-login GPU image (ML)" \
-      org.opencontainers.image.description="CUDA 12.4 devel with cuDNN, PyTorch, TensorFlow, JupyterLab and an SSH login gate that records each interactive login." \
+LABEL org.opencontainers.image.title="Two-factor GPU image (ML)" \
+      org.opencontainers.image.description="CUDA 12.4 devel with cuDNN, PyTorch, TensorFlow, JupyterLab and an SSH login gate that requires a code from an authenticator app, verified on the machine." \
       org.opencontainers.image.source="https://github.com/blackboxai-dev/gpu-verified-image" \
       org.opencontainers.image.documentation="https://github.com/blackboxai-dev/gpu-verified-image/blob/$DOCS_REF/README.md" \
       org.opencontainers.image.vendor="Blackbox AI" \
